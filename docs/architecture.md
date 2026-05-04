@@ -28,28 +28,62 @@ AgentHub 是一个用于承载和调度多种 Agent Runtime 的平台。
 当前顶层模块定义如下：
 
 ```text
-apps/
-  user-portal
-  admin-console
-  control-plane
+cmd/                         # 所有可执行入口；每个 main.go 只做 wire-up
+  control-plane/main.go
+  agent-pod/main.go
+
+internal/                    # 不对外暴露的业务逻辑
+  controlplane/              # 控制面核心
+    server.go                # HTTP 路由
+    workspace.go             # workspace 生命周期；后续从 server.go 拆出
+    session.go               # session/turn 处理；后续从 server.go 拆出
+    store.go                 # 事件持久化
+  agentpod/                  # agent-pod 核心
+    server.go                # HTTP 路由
+    runner.go                # turn 执行、取消、重载；后续从 server.go 拆出
+  driver/                    # 容器驱动，可替换
+    driver.go                # interface Driver
+    docker/                  # Docker Engine API 实现
+      client.go
+      driver.go
+  runtime/                   # AI 运行时适配，可替换
+    runtime.go               # interface Runtime
+    pi/                      # Pi CLI / SDK 实现
+      adapter.go
+
+pkg/                         # 可对外复用的纯工具包
+  protocol/                  # 事件协议定义
+    events.go
+  sse/                       # SSE 读写工具
+    sse.go
+
+web/                         # 前端，非 Go
+  admin-console/
+  user-portal/
+
+deploy/                      # 部署相关
+  Dockerfile.control-plane
+  Dockerfile.agent-pod
+
 docs/
   architecture.md
+  development/
 ```
 
-当前已经开始落地的后端骨架：
+第一阶段先不做 user/admin Web，也不同时接多 runtime；但目录先按 Go 服务最佳实践和产品边界对齐。即使某些模块当前没有代码，也保留明确目录入口，避免后续把职责混进错误位置。
 
-```text
-cmd/
-  control-plane
-  agent-pod
-internal/
-  controlplane
-  agentpod
-  protocol
-  sse
-```
+### 3.1 目录边界原则
 
-第一阶段先不做 user/admin Web，也不同时接多 runtime；先把 Docker AgentPod + Pi Agent adapter + UniversalEvent 主链跑通。
+1. `cmd/*` 只放可执行入口和依赖组装，不放业务逻辑。`main.go` 应该只读取配置、创建 server、启动监听。
+2. `internal/controlplane` 放控制面业务核心，包括 workspace 生命周期、session/turn 处理、AgentPod client、事件持久化。
+3. `internal/agentpod` 放容器内本地控制层，包括 HTTP 路由、turn runner、cancel、reload、shutdown。
+4. `internal/driver` 定义容器驱动接口；`internal/driver/docker` 是 Docker 实现。未来 K8s/VM/local process 只能新增 driver，不应污染 control-plane 主逻辑。
+5. `internal/runtime` 定义 AI runtime 接口；`internal/runtime/pi` 是 Pi Agent 适配。未来 Codex/Claude 只能新增 runtime adapter，不应改 AgentPodServer 主合同。
+6. `pkg/*` 只放可对外复用的纯合同或通用工具。当前只允许 `protocol` 和 `sse`，避免把业务代码放进 pkg。
+7. `web/*` 只放前端；当前可以为空目录。
+8. `deploy/*` 放 Dockerfile、compose、部署脚本等环境相关文件。
+
+当前允许 `server.go` 先承载多一点逻辑以保持第一阶段可运行，但后续一旦继续开发，应按上面标注拆成 `workspace.go`、`session.go`、`runner.go` 等文件，避免再次形成大文件。
 
 ---
 
@@ -338,7 +372,7 @@ user-portal / admin-console
 3. Pi Agent Core 的执行、中断、reload 更适合由本地进程控制。
 4. 中断、健康检查和事件桥接也更适合在容器内收口。
 
-第一阶段实现为 `cmd/agent-pod` 单进程；后续如果 Pi Agent SDK/JSON-RPC 接入复杂度上升，再拆成 Supervisor + adapter 进程。
+第一阶段实现为 `cmd/agent-pod` 单进程入口 + `internal/agentpod` 核心；后续如果 Pi Agent SDK/JSON-RPC 接入复杂度上升，再拆成 Supervisor + adapter 进程。
 
 ---
 

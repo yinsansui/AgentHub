@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"agenthub/internal/protocol"
-	"agenthub/internal/sse"
+	"agenthub/internal/driver"
+	"agenthub/pkg/protocol"
+	"agenthub/pkg/sse"
 )
 
 type AgentPodClient struct {
@@ -22,7 +23,7 @@ func NewAgentPodClient(template string) *AgentPodClient {
 }
 
 func (c *AgentPodClient) Endpoint(workspaceID string) string {
-	return strings.ReplaceAll(c.template, "{workspaceId}", safeID(workspaceID))
+	return strings.ReplaceAll(c.template, "{workspaceId}", driver.SafeID(workspaceID))
 }
 
 func (c *AgentPodClient) Turn(ctx context.Context, workspaceID, token string, turn protocol.TurnRequest, handle func(protocol.UniversalEvent) error) error {

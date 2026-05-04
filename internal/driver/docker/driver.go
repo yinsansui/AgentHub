@@ -1,48 +1,29 @@
-package controlplane
+package docker
 
 import (
+	"agenthub/internal/driver"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
-type AgentPodSpec struct {
-	WorkspaceID   string `json:"workspaceId"`
-	WorkspacePath string `json:"workspacePath"`
-	Image         string `json:"image"`
-	Network       string `json:"network"`
-	Token         string `json:"-"`
-}
-
-type AgentPodInfo struct {
-	WorkspaceID string `json:"workspaceId"`
-	Name        string `json:"name"`
-	Image       string `json:"image"`
-	Network     string `json:"network"`
-	Status      string `json:"status"`
-	Endpoint    string `json:"endpoint"`
-}
-
 type DockerAgentPodDriver struct {
 	client *dockerClient
-	config Config
+	config driver.Config
 }
 
-func NewDockerAgentPodDriver(config Config) *DockerAgentPodDriver {
+func NewDockerAgentPodDriver(config driver.Config) *DockerAgentPodDriver {
 	return &DockerAgentPodDriver{client: newDockerClient(config.DockerSocket), config: config}
 }
 
-func (d *DockerAgentPodDriver) Start(ctx context.Context, spec AgentPodSpec) (AgentPodInfo, error) {
+func (d *DockerAgentPodDriver) Start(ctx context.Context, spec driver.AgentPodSpec) (driver.AgentPodInfo, error) {
 	if spec.WorkspaceID == "" {
-		return AgentPodInfo{}, errors.New("workspaceId is required")
+		return driver.AgentPodInfo{}, errors.New("workspaceId is required")
 	}
 	if spec.Image == "" {
 		spec.Image = d.config.AgentPodImage
@@ -51,30 +32,30 @@ func (d *DockerAgentPodDriver) Start(ctx context.Context, spec AgentPodSpec) (Ag
 		spec.Network = d.config.DockerNetwork
 	}
 	if spec.WorkspacePath == "" {
-		spec.WorkspacePath = filepath.Join(d.config.WorkspaceRoot, safeID(spec.WorkspaceID))
+		spec.WorkspacePath = filepath.Join(d.config.WorkspaceRoot, driver.SafeID(spec.WorkspaceID))
 	}
 	if spec.Token == "" {
-		token, err := newToken()
+		token, err := driver.NewToken()
 		if err != nil {
-			return AgentPodInfo{}, err
+			return driver.AgentPodInfo{}, err
 		}
 		spec.Token = token
 	}
 	if err := os.MkdirAll(spec.WorkspacePath, 0o755); err != nil {
-		return AgentPodInfo{}, err
+		return driver.AgentPodInfo{}, err
 	}
 	if err := d.ensureNetwork(ctx, spec.Network); err != nil {
-		return AgentPodInfo{}, err
+		return driver.AgentPodInfo{}, err
 	}
 	name := podName(spec.WorkspaceID)
 	if _, _, err := d.client.do(ctx, http.MethodPost, "/containers/create?name="+name, createContainerBody(spec, name), http.StatusCreated); err != nil {
 		if !strings.Contains(err.Error(), "409") {
-			return AgentPodInfo{}, err
+			return driver.AgentPodInfo{}, err
 		}
 	}
 	if _, _, err := d.client.do(ctx, http.MethodPost, "/containers/"+escapePathPart(name)+"/start", nil, http.StatusNoContent, http.StatusNotModified); err != nil {
 		if !strings.Contains(err.Error(), "304") {
-			return AgentPodInfo{}, err
+			return driver.AgentPodInfo{}, err
 		}
 	}
 	return d.Inspect(ctx, spec.WorkspaceID)
@@ -98,14 +79,14 @@ func (d *DockerAgentPodDriver) Remove(ctx context.Context, workspaceID string) e
 	return err
 }
 
-func (d *DockerAgentPodDriver) Inspect(ctx context.Context, workspaceID string) (AgentPodInfo, error) {
+func (d *DockerAgentPodDriver) Inspect(ctx context.Context, workspaceID string) (driver.AgentPodInfo, error) {
 	name := podName(workspaceID)
 	payload, status, err := d.client.do(ctx, http.MethodGet, "/containers/"+escapePathPart(name)+"/json", nil, http.StatusOK, http.StatusNotFound)
 	if status == http.StatusNotFound {
-		return AgentPodInfo{WorkspaceID: workspaceID, Name: name, Status: "not_found", Endpoint: d.Endpoint(workspaceID)}, nil
+		return driver.AgentPodInfo{WorkspaceID: workspaceID, Name: name, Status: "not_found", Endpoint: d.Endpoint(workspaceID)}, nil
 	}
 	if err != nil {
-		return AgentPodInfo{}, err
+		return driver.AgentPodInfo{}, err
 	}
 	var out struct {
 		Config struct {
@@ -119,14 +100,14 @@ func (d *DockerAgentPodDriver) Inspect(ctx context.Context, workspaceID string) 
 		} `json:"NetworkSettings"`
 	}
 	if err := json.Unmarshal(payload, &out); err != nil {
-		return AgentPodInfo{}, err
+		return driver.AgentPodInfo{}, err
 	}
 	network := d.config.DockerNetwork
 	for key := range out.NetworkSettings.Networks {
 		network = key
 		break
 	}
-	return AgentPodInfo{WorkspaceID: workspaceID, Name: name, Image: out.Config.Image, Network: network, Status: out.State.Status, Endpoint: d.Endpoint(workspaceID)}, nil
+	return driver.AgentPodInfo{WorkspaceID: workspaceID, Name: name, Image: out.Config.Image, Network: network, Status: out.State.Status, Endpoint: d.Endpoint(workspaceID)}, nil
 }
 
 func (d *DockerAgentPodDriver) Endpoint(workspaceID string) string {
@@ -150,7 +131,7 @@ func (d *DockerAgentPodDriver) ensureNetwork(ctx context.Context, network string
 	return nil
 }
 
-func createContainerBody(spec AgentPodSpec, name string) map[string]any {
+func createContainerBody(spec driver.AgentPodSpec, name string) map[string]any {
 	return map[string]any{
 		"Image": spec.Image,
 		"Env": []string{
@@ -177,25 +158,6 @@ func createContainerBody(spec AgentPodSpec, name string) map[string]any {
 	}
 }
 
-func newToken() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-var idPattern = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
-
-func safeID(value string) string {
-	cleaned := idPattern.ReplaceAllString(value, "-")
-	cleaned = strings.Trim(cleaned, "-._")
-	if cleaned == "" {
-		return "workspace"
-	}
-	return cleaned
-}
-
 func podName(workspaceID string) string {
-	return "agent-pod-" + safeID(workspaceID)
+	return "agent-pod-" + driver.SafeID(workspaceID)
 }

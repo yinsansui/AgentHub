@@ -9,21 +9,23 @@ import (
 	"strings"
 	"sync"
 
-	"agenthub/internal/protocol"
-	"agenthub/internal/sse"
+	"agenthub/internal/runtime"
+	piagent "agenthub/internal/runtime/pi"
+	"agenthub/pkg/protocol"
+	"agenthub/pkg/sse"
 )
 
 type Server struct {
 	workspaceID string
 	runtimeID   string
 	token       string
-	adapter     Adapter
+	adapter     runtime.Runtime
 
 	mu    sync.Mutex
 	turns map[string]context.CancelFunc
 }
 
-func NewServer(workspaceID, runtimeID, token string, adapter Adapter) *Server {
+func NewServer(workspaceID, runtimeID, token string, adapter runtime.Runtime) *Server {
 	return &Server{workspaceID: workspaceID, runtimeID: runtimeID, token: token, adapter: adapter, turns: map[string]context.CancelFunc{}}
 }
 
@@ -31,7 +33,7 @@ func NewServerFromEnv() *Server {
 	workspaceID := env("WORKSPACE_ID", "local")
 	runtimeID := env("RUNTIME_ID", "pi-agent")
 	token := os.Getenv("AGENTHUB_INTERNAL_TOKEN")
-	adapter := Adapter(PiCLIAdapter{Command: os.Getenv("PI_AGENT_COMMAND"), WorkDir: env("WORKSPACE_DIR", "/workspace")})
+	adapter := runtime.Runtime(piagent.PiCLIAdapter{Command: os.Getenv("PI_AGENT_COMMAND"), WorkDir: env("WORKSPACE_DIR", "/workspace")})
 	return NewServer(workspaceID, runtimeID, token, adapter)
 }
 

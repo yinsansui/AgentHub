@@ -1,4 +1,4 @@
-package agentpod
+package pi
 
 import (
 	"bufio"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"agenthub/internal/protocol"
+	"agenthub/pkg/protocol"
 )
 
 type Adapter interface {

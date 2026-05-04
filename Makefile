@@ -1,7 +1,7 @@
 .PHONY: fmt check build-control-plane build-agent-pod build-linux-bins image-agent-pod image-control-plane images
 
 fmt:
-	gofmt -w cmd internal
+	gofmt -w cmd internal pkg
 
 check: fmt
 	go test ./...
@@ -18,9 +18,9 @@ build-linux-bins:
 	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o .agenthub/bin/control-plane ./cmd/control-plane
 
 image-agent-pod: build-linux-bins
-	docker build -f Dockerfile.agent-pod -t agenthub-pi-agent-pod:dev .
+	docker build -f deploy/Dockerfile.agent-pod -t agenthub-pi-agent-pod:dev .
 
 image-control-plane: build-linux-bins
-	docker build -f Dockerfile.control-plane -t agenthub-control-plane:dev .
+	docker build -f deploy/Dockerfile.control-plane -t agenthub-control-plane:dev .
 
 images: image-agent-pod image-control-plane

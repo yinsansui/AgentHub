@@ -2,13 +2,16 @@
 
 当前已落下第一条可编译主链骨架：
 
-1. `cmd/control-plane`：AgentHub control-plane HTTP 服务。
-2. `internal/controlplane/DockerAgentPodDriver`：通过 Docker Engine API 创建、启动、停止、查看 agent-pod container。
-3. `internal/controlplane/AgentPodClient`：通过 Docker network + container name 调用 pod 内部 `/turn`。
-4. `cmd/agent-pod`：容器内 AgentPodServer。
-5. `internal/agentpod/PiCLIAdapter`：Pi Agent CLI/JSONL 适配边界；未配置 `PI_AGENT_COMMAND` 时使用 stub 输出。
-6. `internal/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
-7. `internal/controlplane/EventStore`：开发期 NDJSON event log，后续替换成 DB-backed event log。
+1. `cmd/control-plane`：control-plane 可执行入口，只做 wire-up。
+2. `internal/controlplane`：AgentHub control-plane 核心。
+3. `internal/driver/docker`：通过 Docker Engine API 创建、启动、停止、查看 agent-pod container。
+4. `internal/controlplane/AgentPodClient`：通过 Docker network + container name 调用 pod 内部 `/turn`。
+5. `cmd/agent-pod`：agent-pod 可执行入口，只做 wire-up。
+6. `internal/agentpod`：容器内 AgentPodServer。
+7. `internal/runtime/pi`：Pi Agent CLI/JSONL 适配边界；未配置 `PI_AGENT_COMMAND` 时使用 stub 输出。
+8. `pkg/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
+9. `pkg/sse`：SSE 读写工具。
+10. `internal/controlplane/EventStore`：开发期 NDJSON event log，后续替换成 DB-backed event log。
 
 ## 本地验证
 

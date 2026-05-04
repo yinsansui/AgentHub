@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"agenthub/internal/protocol"
+	"agenthub/pkg/protocol"
 )
 
 func WriteEvent(w http.ResponseWriter, event protocol.UniversalEvent) error {

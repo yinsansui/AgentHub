@@ -7,13 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"agenthub/internal/protocol"
-	"agenthub/internal/sse"
+	"agenthub/internal/driver"
+	dockerdriver "agenthub/internal/driver/docker"
+	"agenthub/pkg/protocol"
+	"agenthub/pkg/sse"
 )
 
 type Server struct {
 	config Config
-	driver *DockerAgentPodDriver
+	driver driver.Driver
 	pods   *AgentPodClient
 	store  *EventStore
 
@@ -24,7 +26,7 @@ type Server struct {
 func NewServer(config Config) *Server {
 	server := &Server{
 		config: config,
-		driver: NewDockerAgentPodDriver(config),
+		driver: dockerdriver.NewDockerAgentPodDriver(driver.Config{DockerSocket: config.DockerSocket, DockerNetwork: config.DockerNetwork, AgentPodImage: config.AgentPodImage, WorkspaceRoot: config.WorkspaceRoot}),
 		pods:   NewAgentPodClient(config.AgentPodBaseURLTemplate),
 		store:  NewEventStore(config.StatePath),
 		tokens: map[string]string{},
@@ -50,11 +52,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStartWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceID := r.PathValue("workspaceId")
-	var req AgentPodSpec
+	var req driver.AgentPodSpec
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	req.WorkspaceID = workspaceID
 	if req.Token == "" {
-		token, err := newToken()
+		token, err := driver.NewToken()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

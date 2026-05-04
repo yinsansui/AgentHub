@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"agenthub/internal/protocol"
+	"agenthub/pkg/protocol"
 )
 
 type EventStore struct {
