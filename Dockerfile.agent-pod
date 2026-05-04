@@ -1,0 +1,6 @@
+FROM scratch
+COPY .agenthub/bin/agent-pod /agent-pod
+ENV AGENT_POD_ADDR=:3001 \
+    WORKSPACE_DIR=/workspace
+EXPOSE 3001
+ENTRYPOINT ["/agent-pod"]
