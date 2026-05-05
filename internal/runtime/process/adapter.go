@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -119,7 +120,7 @@ func (a *Adapter) session(req protocol.TurnRequest) (*sessionProcess, error) {
 	if proc, ok := a.sessions[req.SessionID]; ok {
 		return proc, nil
 	}
-	proc, err := a.startProcess(req.SessionCWD)
+	proc, err := a.startProcess(req.SessionCWD, req.RuntimeEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +136,7 @@ func (a *Adapter) drop(sessionID string, proc *sessionProcess) {
 	}
 }
 
-func (a *Adapter) startProcess(cwd string) (*sessionProcess, error) {
+func (a *Adapter) startProcess(cwd string, runtimeEnv map[string]string) (*sessionProcess, error) {
 	parts := strings.Fields(a.Command)
 	if len(parts) == 0 {
 		return nil, errors.New("runtime process command is required")
@@ -145,6 +146,7 @@ func (a *Adapter) startProcess(cwd string) (*sessionProcess, error) {
 	if cmd.Dir == "" {
 		cmd.Dir = a.WorkDir
 	}
+	cmd.Env = appendRuntimeEnv(os.Environ(), runtimeEnv)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -168,6 +170,35 @@ func (a *Adapter) startProcess(cwd string) (*sessionProcess, error) {
 		close(proc.done)
 	}()
 	return proc, nil
+}
+
+func appendRuntimeEnv(env []string, runtimeEnv map[string]string) []string {
+	if len(runtimeEnv) == 0 {
+		return env
+	}
+	keys := make([]string, 0, len(runtimeEnv))
+	for key := range runtimeEnv {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	overrides := map[string]bool{}
+	for _, key := range keys {
+		overrides[key] = true
+	}
+	filtered := env[:0]
+	for _, item := range env {
+		name, _, ok := strings.Cut(item, "=")
+		if ok && overrides[name] {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	for _, key := range keys {
+		filtered = append(filtered, key+"="+runtimeEnv[key])
+	}
+	return filtered
 }
 
 func (p *sessionProcess) send(command bridgeCommand) error {

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -11,32 +12,36 @@ import (
 )
 
 type MemoryStore struct {
-	mu          sync.RWMutex
-	nextEventID int64
-	workspace   map[string]string
-	events      map[string][]StoredEvent
-	messages    map[string]map[string]MessageProjection
-	order       map[string][]string
-	tasks       map[string]TaskProjection
-	sessions    map[string]SessionProjection
-	activeRuns  map[string]string
-	runs        map[string]SessionRun
-	skills      map[string]SkillDefinitionWithFiles
-	mcpServers  map[string]MCPServerDefinitionWithEnv
+	mu             sync.RWMutex
+	nextEventID    int64
+	workspace      map[string]string
+	events         map[string][]StoredEvent
+	messages       map[string]map[string]MessageProjection
+	order          map[string][]string
+	tasks          map[string]TaskProjection
+	sessions       map[string]SessionProjection
+	activeRuns     map[string]string
+	runs           map[string]SessionRun
+	skills         map[string]SkillDefinitionWithFiles
+	mcpServers     map[string]MCPServerDefinitionWithEnv
+	llmConnections map[string]LLMConnection
+	llmModels      map[string]LLMConnectionModel
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		workspace:  map[string]string{},
-		events:     map[string][]StoredEvent{},
-		messages:   map[string]map[string]MessageProjection{},
-		order:      map[string][]string{},
-		tasks:      map[string]TaskProjection{},
-		sessions:   map[string]SessionProjection{},
-		activeRuns: map[string]string{},
-		runs:       map[string]SessionRun{},
-		skills:     map[string]SkillDefinitionWithFiles{},
-		mcpServers: map[string]MCPServerDefinitionWithEnv{},
+		workspace:      map[string]string{},
+		events:         map[string][]StoredEvent{},
+		messages:       map[string]map[string]MessageProjection{},
+		order:          map[string][]string{},
+		tasks:          map[string]TaskProjection{},
+		sessions:       map[string]SessionProjection{},
+		activeRuns:     map[string]string{},
+		runs:           map[string]SessionRun{},
+		skills:         map[string]SkillDefinitionWithFiles{},
+		mcpServers:     map[string]MCPServerDefinitionWithEnv{},
+		llmConnections: map[string]LLMConnection{},
+		llmModels:      map[string]LLMConnectionModel{},
 	}
 }
 
@@ -73,6 +78,7 @@ func (s *MemoryStore) CreateSession(ctx context.Context, workspaceID, taskID, se
 	}
 	session.TaskID = taskID
 	session.WorkspaceID = workspaceID
+	session.ModelID = req.ModelID
 	session.Title = req.Title
 	session.Metadata = cloneMetadata(req.Metadata)
 	session.UpdatedAt = now
@@ -89,6 +95,73 @@ func (s *MemoryStore) GetSession(ctx context.Context, sessionID string) (Session
 	}
 	session.Metadata = cloneMetadata(session.Metadata)
 	return session, true, nil
+}
+
+func (s *MemoryStore) GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	connection, ok := s.llmConnections[workspaceID]
+	return connection, ok, nil
+}
+
+func (s *MemoryStore) UpsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if existing, ok := s.llmConnections[workspaceID]; ok {
+		connection.ID = existing.ID
+		connection.CreatedAt = existing.CreatedAt
+	} else {
+		connection.CreatedAt = now
+	}
+	connection.UserID = ""
+	connection.WorkspaceID = workspaceID
+	connection.UpdatedAt = now
+	s.llmConnections[workspaceID] = connection
+	return connection, nil
+}
+
+func (s *MemoryStore) ListWorkspaceLLMModels(ctx context.Context, workspaceID string) ([]LLMConnectionModel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	connection, ok := s.llmConnections[workspaceID]
+	if !ok {
+		return nil, nil
+	}
+	models := []LLMConnectionModel{}
+	for _, model := range s.llmModels {
+		if model.ConnectionID == connection.ID {
+			models = append(models, cloneLLMConnectionModel(model))
+		}
+	}
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Enabled != models[j].Enabled {
+			return models[i].Enabled
+		}
+		return models[i].ModelID < models[j].ModelID
+	})
+	return models, nil
+}
+
+func (s *MemoryStore) UpsertWorkspaceLLMModel(ctx context.Context, workspaceID string, model LLMConnectionModel) (LLMConnectionModel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	connection, ok := s.llmConnections[workspaceID]
+	if !ok {
+		return LLMConnectionModel{}, errors.New("llm connection is not configured")
+	}
+	now := time.Now().UTC()
+	key := connection.ID + "\x00" + model.ModelID
+	if existing, ok := s.llmModels[key]; ok {
+		model.ID = existing.ID
+		model.CreatedAt = existing.CreatedAt
+	} else {
+		model.CreatedAt = now
+	}
+	model.ConnectionID = connection.ID
+	model.UpdatedAt = now
+	s.llmModels[key] = cloneLLMConnectionModel(model)
+	return cloneLLMConnectionModel(model), nil
 }
 
 func (s *MemoryStore) ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
@@ -490,4 +563,13 @@ func cloneMCPServerWithEnv(server MCPServerDefinitionWithEnv) MCPServerDefinitio
 	def := server.Definition
 	def.Args = append([]string(nil), def.Args...)
 	return MCPServerDefinitionWithEnv{Definition: def, Env: env}
+}
+
+func cloneLLMConnectionModel(model LLMConnectionModel) LLMConnectionModel {
+	model.Raw = cloneMetadata(model.Raw)
+	if model.LastSeenAt != nil {
+		lastSeenAt := *model.LastSeenAt
+		model.LastSeenAt = &lastSeenAt
+	}
+	return model
 }

@@ -34,6 +34,10 @@ type EventStore interface {
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
+	GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error)
+	UpsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error)
+	ListWorkspaceLLMModels(ctx context.Context, workspaceID string) ([]LLMConnectionModel, error)
+	UpsertWorkspaceLLMModel(ctx context.Context, workspaceID string, model LLMConnectionModel) (LLMConnectionModel, error)
 	ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error)
 	ListMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error)
 	ListWorkspaceSkills(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error)
@@ -85,10 +89,35 @@ type SessionProjection struct {
 	SessionID   string         `json:"sessionId"`
 	TaskID      string         `json:"taskId"`
 	WorkspaceID string         `json:"workspaceId"`
+	ModelID     string         `json:"modelId,omitempty"`
 	Title       string         `json:"title,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	CreatedAt   time.Time      `json:"createdAt"`
 	UpdatedAt   time.Time      `json:"updatedAt"`
+}
+
+type LLMConnection struct {
+	ID          string    `json:"id"`
+	UserID      string    `json:"userId"`
+	WorkspaceID string    `json:"workspaceId"`
+	Provider    string    `json:"provider"`
+	APIProtocol string    `json:"apiProtocol"`
+	BaseURL     string    `json:"baseUrl"`
+	APIKey      string    `json:"apiKey,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type LLMConnectionModel struct {
+	ID           string         `json:"id"`
+	ConnectionID string         `json:"connectionId"`
+	ModelID      string         `json:"modelId"`
+	Source       string         `json:"source"`
+	Enabled      bool           `json:"enabled"`
+	Raw          map[string]any `json:"raw,omitempty"`
+	LastSeenAt   *time.Time     `json:"lastSeenAt,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	UpdatedAt    time.Time      `json:"updatedAt"`
 }
 
 type SessionRun struct {
@@ -242,6 +271,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
+  model_id TEXT NOT NULL DEFAULT '',
   title TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   active_run_id TEXT,
@@ -270,6 +300,32 @@ CREATE INDEX IF NOT EXISTS idx_sessions_active_run_id ON sessions (active_run_id
 CREATE INDEX IF NOT EXISTS idx_session_runs_session_status ON session_runs (session_id, status, started_at);
 CREATE INDEX IF NOT EXISTS idx_session_runs_workspace_session ON session_runs (workspace_id, session_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_session_runs_task_session ON session_runs (task_id, session_id, started_at);
+CREATE TABLE IF NOT EXISTS llm_connections (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT '',
+  workspace_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'anthropic',
+  api_protocol TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  api_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_connections_user_workspace ON llm_connections (user_id, workspace_id);
+CREATE INDEX IF NOT EXISTS idx_llm_connections_workspace ON llm_connections (workspace_id, user_id);
+CREATE TABLE IF NOT EXISTS llm_connection_models (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_connection_models_connection_model ON llm_connection_models (connection_id, model_id);
+CREATE INDEX IF NOT EXISTS idx_llm_connection_models_connection_enabled ON llm_connection_models (connection_id, enabled, model_id);
 CREATE TABLE IF NOT EXISTS messages (
   session_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -386,6 +442,22 @@ func (s *Store) CreateSession(ctx context.Context, workspaceID, taskID, sessionI
 
 func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
 	return s.getSession(ctx, sessionID)
+}
+
+func (s *Store) GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
+	return s.getWorkspaceLLMConnection(ctx, workspaceID)
+}
+
+func (s *Store) UpsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error) {
+	return s.upsertWorkspaceLLMConnection(ctx, workspaceID, connection)
+}
+
+func (s *Store) ListWorkspaceLLMModels(ctx context.Context, workspaceID string) ([]LLMConnectionModel, error) {
+	return s.listWorkspaceLLMModels(ctx, workspaceID)
+}
+
+func (s *Store) UpsertWorkspaceLLMModel(ctx context.Context, workspaceID string, model LLMConnectionModel) (LLMConnectionModel, error) {
+	return s.upsertWorkspaceLLMModel(ctx, workspaceID, model)
 }
 
 func (s *Store) ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {

@@ -177,10 +177,10 @@ RETURNING id, workspace_id, created_at, updated_at
 	var session SessionProjection
 	var metadata []byte
 	err = tx.QueryRow(ctx, `
-INSERT INTO sessions (id, task_id, workspace_id, title, metadata, updated_at)
-VALUES ($1, $2, $3, $4, $5::jsonb, now())
-RETURNING id, task_id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
-`, sessionID, taskID, workspaceID, nullIfEmpty(req.Title), payload).Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
+INSERT INTO sessions (id, task_id, workspace_id, model_id, title, metadata, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, now())
+RETURNING id, task_id, workspace_id, model_id, COALESCE(title, ''), metadata, created_at, updated_at
+`, sessionID, taskID, workspaceID, req.ModelID, nullIfEmpty(req.Title), payload).Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.ModelID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
 		return TaskProjection{}, SessionProjection{}, err
 	}
@@ -197,10 +197,10 @@ func (s *Store) getSession(ctx context.Context, sessionID string) (SessionProjec
 	var session SessionProjection
 	var metadata []byte
 	err := s.pool.QueryRow(ctx, `
-SELECT id, task_id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
+SELECT id, task_id, workspace_id, model_id, COALESCE(title, ''), metadata, created_at, updated_at
 FROM sessions
 WHERE id = $1
-`, sessionID).Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
+`, sessionID).Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.ModelID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionProjection{}, false, nil
 	}
@@ -211,6 +211,147 @@ WHERE id = $1
 		_ = json.Unmarshal(metadata, &session.Metadata)
 	}
 	return session, true, nil
+}
+
+func (s *Store) getWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
+	var connection LLMConnection
+	err := s.pool.QueryRow(ctx, `
+SELECT id, user_id, workspace_id, provider, api_protocol, base_url, api_key, created_at, updated_at
+FROM llm_connections
+WHERE user_id = '' AND workspace_id = $1
+`, workspaceID).Scan(
+		&connection.ID,
+		&connection.UserID,
+		&connection.WorkspaceID,
+		&connection.Provider,
+		&connection.APIProtocol,
+		&connection.BaseURL,
+		&connection.APIKey,
+		&connection.CreatedAt,
+		&connection.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return LLMConnection{}, false, nil
+	}
+	if err != nil {
+		return LLMConnection{}, false, err
+	}
+	return connection, true, nil
+}
+
+func (s *Store) upsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error) {
+	err := s.pool.QueryRow(ctx, `
+INSERT INTO llm_connections (id, user_id, workspace_id, provider, api_protocol, base_url, api_key, updated_at)
+VALUES ($1, '', $2, $3, $4, $5, $6, now())
+ON CONFLICT (user_id, workspace_id)
+DO UPDATE SET
+  provider = EXCLUDED.provider,
+  api_protocol = EXCLUDED.api_protocol,
+  base_url = EXCLUDED.base_url,
+  api_key = EXCLUDED.api_key,
+  updated_at = now()
+RETURNING id, user_id, workspace_id, provider, api_protocol, base_url, api_key, created_at, updated_at
+`, connection.ID, workspaceID, connection.Provider, connection.APIProtocol, connection.BaseURL, connection.APIKey).Scan(
+		&connection.ID,
+		&connection.UserID,
+		&connection.WorkspaceID,
+		&connection.Provider,
+		&connection.APIProtocol,
+		&connection.BaseURL,
+		&connection.APIKey,
+		&connection.CreatedAt,
+		&connection.UpdatedAt,
+	)
+	if err != nil {
+		return LLMConnection{}, err
+	}
+	return connection, nil
+}
+
+func (s *Store) listWorkspaceLLMModels(ctx context.Context, workspaceID string) ([]LLMConnectionModel, error) {
+	connection, ok, err := s.getWorkspaceLLMConnection(ctx, workspaceID)
+	if err != nil || !ok {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT id, connection_id, model_id, source, enabled, raw, last_seen_at, created_at, updated_at
+FROM llm_connection_models
+WHERE connection_id = $1
+ORDER BY enabled DESC, model_id ASC
+`, connection.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	models := []LLMConnectionModel{}
+	for rows.Next() {
+		model, err := scanLLMConnectionModel(rows)
+		if err != nil {
+			return nil, err
+		}
+		models = append(models, model)
+	}
+	return models, rows.Err()
+}
+
+func (s *Store) upsertWorkspaceLLMModel(ctx context.Context, workspaceID string, model LLMConnectionModel) (LLMConnectionModel, error) {
+	connection, ok, err := s.getWorkspaceLLMConnection(ctx, workspaceID)
+	if err != nil {
+		return LLMConnectionModel{}, err
+	}
+	if !ok {
+		return LLMConnectionModel{}, errors.New("llm connection is not configured")
+	}
+	rawPayload, err := json.Marshal(model.Raw)
+	if err != nil {
+		return LLMConnectionModel{}, err
+	}
+	row := s.pool.QueryRow(ctx, `
+INSERT INTO llm_connection_models (id, connection_id, model_id, source, enabled, raw, last_seen_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
+ON CONFLICT (connection_id, model_id)
+DO UPDATE SET
+  source = EXCLUDED.source,
+  enabled = EXCLUDED.enabled,
+  raw = EXCLUDED.raw,
+  last_seen_at = EXCLUDED.last_seen_at,
+  updated_at = now()
+RETURNING id, connection_id, model_id, source, enabled, raw, last_seen_at, created_at, updated_at
+`, model.ID, connection.ID, model.ModelID, model.Source, model.Enabled, rawPayload, model.LastSeenAt)
+	return scanLLMConnectionModel(row)
+}
+
+type llmModelScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLLMConnectionModel(row llmModelScanner) (LLMConnectionModel, error) {
+	var model LLMConnectionModel
+	var raw []byte
+	var lastSeenAt sql.NullTime
+	if err := row.Scan(
+		&model.ID,
+		&model.ConnectionID,
+		&model.ModelID,
+		&model.Source,
+		&model.Enabled,
+		&raw,
+		&lastSeenAt,
+		&model.CreatedAt,
+		&model.UpdatedAt,
+	); err != nil {
+		return LLMConnectionModel{}, err
+	}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &model.Raw)
+	}
+	if model.Raw == nil {
+		model.Raw = map[string]any{}
+	}
+	if lastSeenAt.Valid {
+		model.LastSeenAt = &lastSeenAt.Time
+	}
+	return model, nil
 }
 
 func (s *Store) listSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {

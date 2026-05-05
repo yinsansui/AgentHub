@@ -32,6 +32,12 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 		}
 		turn = turnRequestFromFirstTurn(workspaceID, taskID, sessionID, req.FirstTurn)
 	}
+	modelID, err := s.resolveSessionModelID(r.Context(), workspaceID, req.ModelID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.ModelID = modelID
 
 	token, ok := s.workspaceExecutionToken(r.Context(), workspaceID)
 	if !ok {
@@ -129,6 +135,11 @@ func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) startTurnForSession(ctx context.Context, workspaceID, token string, turn protocol.TurnRequest) (SessionRun, error) {
+	runtimeEnv, err := s.runtimeEnvForTurn(ctx, turn)
+	if err != nil {
+		return SessionRun{}, err
+	}
+	turn.RuntimeEnv = runtimeEnv
 	run, err := s.store.StartRun(ctx, turn)
 	if err != nil {
 		return SessionRun{}, err
@@ -152,6 +163,60 @@ func (s *Server) startTurnForSession(ctx context.Context, workspaceID, token str
 		s.finishRunAfterTurn(context.Background(), run, err)
 	}()
 	return run, nil
+}
+
+func (s *Server) resolveSessionModelID(ctx context.Context, workspaceID, requestedModelID string) (string, error) {
+	if _, ok, err := s.store.GetWorkspaceLLMConnection(ctx, workspaceID); err != nil {
+		return "", err
+	} else if !ok {
+		return "", errors.New("llm connection is not configured")
+	}
+	models, err := s.store.ListWorkspaceLLMModels(ctx, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	requestedModelID = strings.TrimSpace(requestedModelID)
+	if requestedModelID != "" {
+		for _, model := range models {
+			if model.ModelID == requestedModelID && model.Enabled {
+				return requestedModelID, nil
+			}
+		}
+		return "", errors.New("model is not enabled for this workspace: " + requestedModelID)
+	}
+	for _, model := range models {
+		if model.Enabled {
+			return model.ModelID, nil
+		}
+	}
+	return "", errors.New("no enabled llm model configured for this workspace")
+}
+
+func (s *Server) runtimeEnvForTurn(ctx context.Context, turn protocol.TurnRequest) (map[string]string, error) {
+	session, ok, err := s.store.GetSession(ctx, turn.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrSessionNotFound
+	}
+	if strings.TrimSpace(session.ModelID) == "" {
+		return nil, errors.New("session modelId is empty")
+	}
+	connection, ok, err := s.store.GetWorkspaceLLMConnection(ctx, session.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("llm connection is not configured")
+	}
+	return map[string]string{
+		"AGENTHUB_PI_PROVIDER": connection.Provider,
+		"AGENTHUB_PI_API":      connection.APIProtocol,
+		"AGENTHUB_PI_BASE_URL": connection.BaseURL,
+		"AGENTHUB_PI_MODEL":    session.ModelID,
+		"AGENTHUB_PI_API_KEY":  connection.APIKey,
+	}, nil
 }
 
 func (s *Server) workspaceExecutionToken(ctx context.Context, workspaceID string) (string, bool) {

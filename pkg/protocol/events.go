@@ -12,13 +12,14 @@ const (
 )
 
 type TurnRequest struct {
-	WorkspaceID string `json:"workspaceId"`
-	TaskID      string `json:"taskId"`
-	SessionID   string `json:"sessionId"`
-	RunID       string `json:"runId"`
-	Message     string `json:"message"`
-	Source      string `json:"source"`
-	SessionCWD  string `json:"sessionCwd,omitempty"`
+	WorkspaceID string            `json:"workspaceId"`
+	TaskID      string            `json:"taskId"`
+	SessionID   string            `json:"sessionId"`
+	RunID       string            `json:"runId"`
+	Message     string            `json:"message"`
+	Source      string            `json:"source"`
+	SessionCWD  string            `json:"sessionCwd,omitempty"`
+	RuntimeEnv  map[string]string `json:"runtimeEnv,omitempty"`
 }
 
 const (
@@ -99,6 +100,7 @@ type MCPServerConfig struct {
 type CreateSessionRequest struct {
 	Title     string            `json:"title,omitempty"`
 	Metadata  map[string]any    `json:"metadata,omitempty"`
+	ModelID   string            `json:"modelId,omitempty"`
 	FirstTurn *FirstTurnRequest `json:"firstTurn,omitempty"`
 }
 

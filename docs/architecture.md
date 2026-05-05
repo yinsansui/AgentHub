@@ -402,15 +402,40 @@ Go AgentPodServer
 4. pi-coding-agent 创建 session 时显式加载当前 session cwd 下的 `.agents/skills`。
 5. `.agents/mcp.json` 本阶段只负责物理化，不保证被 pi-coding-agent 消费。
 
-runtime-host 支持用环境变量选择 Anthropic-compatible 模型端点：
+LLM connection 配置由 control-plane 存储在 DB / 内存 store 中，不通过 shell 手工注入。运行 turn 前，control-plane 根据 `session.model_id` 和 workspace 级 connection 生成 runtime env；AgentPodServer 把 env 传给 `internal/runtime/process`，由 process adapter 在创建 `ts-runtime-host` 子进程时注入。
 
 | 变量 | 含义 |
 | --- | --- |
 | `AGENTHUB_PI_PROVIDER` | provider 名称，默认 `anthropic` |
 | `AGENTHUB_PI_API` | pi API 类型，Anthropic 协议使用 `anthropic-messages` |
-| `AGENTHUB_PI_BASE_URL` / `ANTHROPIC_BASE_URL` | 模型服务 base URL |
-| `AGENTHUB_PI_MODEL` / `ANTHROPIC_MODEL` | 模型 ID |
-| `AGENTHUB_PI_API_KEY` / `ANTHROPIC_API_KEY` | 运行时 API key，只放环境变量，不落库、不写仓库 |
+| `AGENTHUB_PI_BASE_URL` | 模型服务 base URL |
+| `AGENTHUB_PI_MODEL` | session 锁定的模型 ID |
+| `AGENTHUB_PI_API_KEY` | workspace connection 中保存的 API key，仅注入 runtime-host 子进程，不进入事件日志 |
+
+LLM 存储模型：
+
+```text
+llm_connections
+  user_id       # 当前阶段固定为空字符串，预留 user_workspace 维度
+  workspace_id
+  provider
+  api_protocol
+  base_url
+  api_key
+
+llm_connection_models
+  connection_id
+  model_id
+  source        # discovered / manual
+  enabled
+  raw
+  last_seen_at
+
+sessions
+  model_id      # session 只锁定 model_id，不复制 connection snapshot
+```
+
+创建 session 时如果请求未指定 `modelId`，control-plane 选择该 workspace 下第一个 enabled model。session 创建后没有切换 model 的 API；只要产生过 turn，就不支持切换 model。
 
 ### 8.4 短生命周期：Run Invocation Context
 

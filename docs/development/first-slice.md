@@ -27,17 +27,12 @@ make images
 AGENTHUB_INTERNAL_TOKEN=dev-token WORKSPACE_ID=ws_dev go run ./cmd/agent-pod
 ```
 
-对接 Anthropic-compatible 真实模型时，先构建 TS runtime host，然后通过环境变量注入 endpoint、model 和 key：
+对接 Anthropic-compatible 真实模型时，先构建 TS runtime host。AgentPod 本地进程只需要 runtime-host 启动命令；LLM endpoint、API key 和可用 model 通过 control-plane API 存储到 DB / 内存 store：
 
 ```bash
 cd runtimes/ts-runtime-host && npm ci && npm run build && cd ../..
 
 AGENTHUB_RUNTIME_COMMAND="node $(pwd)/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent" \
-AGENTHUB_PI_PROVIDER=anthropic \
-AGENTHUB_PI_API=anthropic-messages \
-AGENTHUB_PI_BASE_URL=http://example.local:8084 \
-AGENTHUB_PI_MODEL=k2p5 \
-AGENTHUB_PI_API_KEY=... \
 AGENTHUB_INTERNAL_TOKEN=dev-token \
 WORKSPACE_ID=ws_dev \
 go run ./cmd/agent-pod
@@ -50,9 +45,17 @@ AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE=http://127.0.0.1:3001 \
 AGENTHUB_DEV_AGENT_POD_TOKEN=dev-token \
 go run ./cmd/control-plane
 
+curl -sS -X PUT http://127.0.0.1:3000/workspaces/ws_dev/llm-connection \
+  -H 'content-type: application/json' \
+  -d '{"provider":"anthropic","apiProtocol":"anthropic-messages","baseUrl":"http://example.local:8084","apiKey":"..."}'
+
+curl -sS -X PUT http://127.0.0.1:3000/workspaces/ws_dev/llm-models \
+  -H 'content-type: application/json' \
+  -d '{"modelId":"k2p5","enabled":true}'
+
 curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
   -H 'content-type: application/json' \
-  -d '{"firstTurn":{"message":"hello"}}'
+  -d '{"modelId":"k2p5","firstTurn":{"message":"hello"}}'
 ```
 
 真正使用 Docker container 时，control-plane 应与 agent-pod 在同一个 Docker network 中。当前 agent-pod 镜像基于 `node:22-slim`，同时包含静态 Go `agent-pod` binary 和构建后的 `ts-runtime-host`。
