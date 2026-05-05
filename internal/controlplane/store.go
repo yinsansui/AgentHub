@@ -23,6 +23,7 @@ const (
 	RunStatusCompleted  = "completed"
 	RunStatusFailed     = "failed"
 	RunStatusCancelled  = "cancelled"
+	RunStatusTimedOut   = "timed_out"
 
 	DefaultEventReplayLimit = 500
 	MaxEventReplayLimit     = 1000

@@ -144,23 +144,45 @@ func (s *Server) startTurnForSession(ctx context.Context, workspaceID, token str
 	if err != nil {
 		return SessionRun{}, err
 	}
+	if _, err := s.appendAndPublish(ctx, runLifecycleEvent(run, protocol.EventRunStarted, "started", nil)); err != nil {
+		_, _ = s.store.FinishRun(context.Background(), turn.SessionID, turn.RunID, RunStatusFailed, &protocol.EventErrorPayload{Code: "run_start_event_failed", Message: err.Error()})
+		return SessionRun{}, err
+	}
 	stored, err := s.appendAndPublish(ctx, userMessageEvent(turn))
 	if err != nil {
-		_, _ = s.store.FinishRun(context.Background(), turn.SessionID, turn.RunID, RunStatusFailed, &protocol.EventErrorPayload{Message: err.Error()})
+		_, _ = s.store.FinishRun(context.Background(), turn.SessionID, turn.RunID, RunStatusFailed, &protocol.EventErrorPayload{Code: "user_message_event_failed", Message: err.Error()})
 		return SessionRun{}, err
 	}
 	run.LastEventID = stored.ID
 	go func() {
-		err := s.pods.Turn(context.Background(), workspaceID, token, turn, func(event protocol.UniversalEvent) error {
+		runCtx := context.Background()
+		cancel := func() {}
+		if s.config.RunTimeout > 0 {
+			runCtx, cancel = context.WithTimeout(context.Background(), s.config.RunTimeout)
+		}
+		defer cancel()
+		var runtimeError *protocol.EventErrorPayload
+		err := s.pods.Turn(runCtx, workspaceID, token, turn, func(event protocol.UniversalEvent) error {
+			if event.Type == protocol.EventError && event.Error != nil && runtimeError == nil {
+				copied := *event.Error
+				runtimeError = &copied
+			}
 			_, err := s.appendAndPublish(context.Background(), event)
 			return err
 		})
-		if err != nil {
+		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+		if timedOut && runtimeError == nil {
+			runtimeError = timeoutRunError(s.config.RunTimeout)
 			event := protocol.NewEvent(protocol.EventError, turn)
-			event.Error = &protocol.EventErrorPayload{Message: err.Error()}
+			event.Error = runtimeError
+			_, _ = s.appendAndPublish(context.Background(), event)
+		} else if err != nil && runtimeError == nil {
+			runtimeError = &protocol.EventErrorPayload{Message: err.Error()}
+			event := protocol.NewEvent(protocol.EventError, turn)
+			event.Error = runtimeError
 			_, _ = s.appendAndPublish(context.Background(), event)
 		}
-		s.finishRunAfterTurn(context.Background(), run, err)
+		s.finishRunAfterTurn(context.Background(), run, err, runtimeError, timedOut)
 	}()
 	return run, nil
 }
@@ -274,16 +296,51 @@ func newRunID() string {
 
 func userMessageEvent(turn protocol.TurnRequest) protocol.UniversalEvent {
 	messageID := "user_" + turn.RunID
-	event := protocol.NewEvent(protocol.EventItemCompleted, turn)
-	event.ItemID = messageID
+	event := protocol.NewEvent(protocol.EventMessageCompleted, turn)
+	event.MessageID = messageID
 	event.Role = "user"
-	event.Item = &protocol.UniversalItem{
-		ID:      messageID,
-		Type:    "message",
-		Role:    "user",
-		Content: []protocol.UniversalBlock{{Type: "text", Text: turn.Message}},
+	event.Content = []protocol.UniversalBlock{{Type: "text", Text: turn.Message}}
+	return event
+}
+
+func runLifecycleEvent(run SessionRun, eventType, reason string, eventError *protocol.EventErrorPayload) protocol.UniversalEvent {
+	event := protocol.UniversalEvent{
+		Type:        eventType,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		WorkspaceID: run.WorkspaceID,
+		TaskID:      run.TaskID,
+		SessionID:   run.SessionID,
+		RunID:       run.RunID,
+		Error:       eventError,
+		Metadata: map[string]any{
+			"runStatus": run.Status,
+		},
+	}
+	if reason != "" {
+		event.Metadata["reason"] = reason
 	}
 	return event
+}
+
+func runTerminalEventType(status string) string {
+	switch status {
+	case RunStatusCompleted:
+		return protocol.EventRunCompleted
+	case RunStatusCancelled:
+		return protocol.EventRunCancelled
+	case RunStatusTimedOut:
+		return protocol.EventRunTimedOut
+	default:
+		return protocol.EventRunFailed
+	}
+}
+
+func timeoutRunError(timeout time.Duration) *protocol.EventErrorPayload {
+	message := "run timed out"
+	if timeout > 0 {
+		message = "run timed out after " + timeout.String()
+	}
+	return &protocol.EventErrorPayload{Code: "run_timeout", Message: message}
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +455,11 @@ func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) 
 	cancelDelivered := false
 	var cancelError string
 	if result.Run != nil {
+		if result.Reason != "already_cancelling" {
+			if _, eventErr := s.appendAndPublish(context.Background(), runLifecycleEvent(*result.Run, protocol.EventRunCancelling, req.Reason, nil)); eventErr != nil {
+				cancelError = "append cancelling event failed: " + eventErr.Error()
+			}
+		}
 		token, ok := s.workspaceToken(r.Context(), result.Run.WorkspaceID)
 		if !ok && s.config.DevAgentPodToken != "" {
 			token = s.config.DevAgentPodToken
@@ -430,20 +492,35 @@ func (s *Server) appendAndPublish(ctx context.Context, event protocol.UniversalE
 	return stored, nil
 }
 
-func (s *Server) finishRunAfterTurn(ctx context.Context, started SessionRun, turnErr error) {
+func (s *Server) finishRunAfterTurn(ctx context.Context, started SessionRun, turnErr error, runtimeError *protocol.EventErrorPayload, timedOut bool) {
 	run, ok, err := s.store.GetRun(ctx, started.SessionID, started.RunID)
 	if err != nil || !ok || isTerminalRunStatus(run.Status) {
 		return
 	}
 	status := RunStatusCompleted
 	var eventError *protocol.EventErrorPayload
-	if run.Status == RunStatusCancelling {
+	reason := "completed"
+	if timedOut {
+		status = RunStatusTimedOut
+		reason = "timeout"
+		eventError = timeoutRunError(s.config.RunTimeout)
+	} else if runtimeError != nil {
+		status = RunStatusFailed
+		reason = "runtime_error"
+		eventError = runtimeError
+	} else if run.Status == RunStatusCancelling {
 		status = RunStatusCancelled
+		reason = "cancelled"
 	} else if turnErr != nil {
 		status = RunStatusFailed
+		reason = "turn_error"
 		eventError = &protocol.EventErrorPayload{Message: turnErr.Error()}
 	}
-	_, _ = s.store.FinishRun(ctx, started.SessionID, started.RunID, status, eventError)
+	finished, err := s.store.FinishRun(ctx, started.SessionID, started.RunID, status, eventError)
+	if err != nil {
+		return
+	}
+	_, _ = s.appendAndPublish(ctx, runLifecycleEvent(finished, runTerminalEventType(status), reason, eventError))
 }
 
 func (s *Server) writeReplay(w http.ResponseWriter, r *http.Request, sessionID string, cursor *int64) error {

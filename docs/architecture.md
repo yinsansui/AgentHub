@@ -504,11 +504,25 @@ Skill 和 MCP 是两种不同扩展面：
 当前统一事件类型至少包括：
 
 1. `session.started`
-2. `item.started`
-3. `item.delta`
-4. `item.completed`
-5. `session.ended`
-6. `error`
+2. `session.ended`
+3. `error`
+4. `run.started`
+5. `run.cancelling`
+6. `run.completed`
+7. `run.failed`
+8. `run.cancelled`
+9. `run.timed_out`
+10. `message.started`
+11. `message.completed`
+12. `text.started`
+13. `text.delta`
+14. `text.completed`
+15. `thinking.started`
+16. `thinking.delta`
+17. `thinking.completed`
+18. `tool_call.started`
+19. `tool_call.delta`
+20. `tool_call.completed`
 
 这些事件由 runtime-host adapter 输出，`AgentPodServer` 负责以 SSE 转发，`control-plane` 负责 intercept、持久化和回放。
 
@@ -519,7 +533,7 @@ Skill 和 MCP 是两种不同扩展面：
 3. `runId`
 4. `timestamp`
 
-事件事实进入 PostgreSQL append-only `session_events` event log；`session_events.id` 使用数据库全局递增序列作为跨 session 的 replay cursor。`messages` 保存消息级 projection 元数据，`message_blocks` 保存最终可展示内容块。`item.delta` 只表示实时流式增量，不直接落成 block；`item.completed` 必须携带完整 `item.content`，projection 以该完整内容重建对应 message blocks。
+事件事实进入 PostgreSQL append-only `session_events` event log；`session_events.id` 使用数据库全局递增序列作为跨 session 的 replay cursor。`messages` 保存消息级 projection 元数据，`message_blocks` 保存最终可展示内容块。`text.delta` / `thinking.delta` / `tool_call.delta` 只表示实时块级增量，不直接落成 block；`message.completed` 必须携带完整 `content`，projection 以该完整内容重建对应 message blocks。
 
 前端读取采用三层合同：
 
@@ -624,7 +638,7 @@ Skill 和 MCP 是两种不同扩展面：
 
 以下内容本轮先不展开，但后续需要继续细化：
 
-1. run 超时、重试与更完整观测模型
+1. run 重试与更完整观测模型
 2. repo plugin：基于通用 MCP / skill 机制之后再实现，能力包括 repo catalog、UI 可选仓库列表、clone 状态记录、`repo.clone` MCP tool、repo knowledge skill、以及 clone 到 task `repos/` 目录
 3. task 目录结构与 workspace 复用策略
 4. workspace 的复用、回收和资源限制策略

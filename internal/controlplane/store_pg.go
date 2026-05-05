@@ -29,7 +29,7 @@ func (s *Store) append(ctx context.Context, event protocol.UniversalEvent) (Stor
 INSERT INTO session_events (workspace_id, session_id, run_id, event_type, item_id, payload)
 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
 RETURNING id, event_type, created_at
-`, event.WorkspaceID, event.SessionID, event.RunID, event.Type, nullIfEmpty(projectionItemID(event)), payload).Scan(&stored.ID, &stored.Type, &stored.CreatedAt)
+`, event.WorkspaceID, event.SessionID, event.RunID, event.Type, nullIfEmpty(projectionMessageID(event)), payload).Scan(&stored.ID, &stored.Type, &stored.CreatedAt)
 	if err != nil {
 		return StoredEvent{}, err
 	}
@@ -988,7 +988,7 @@ func (s *Store) requestRunInterrupt(ctx context.Context, sessionID, expectedRunI
 		return RunInterruptResult{Interrupted: false, Reason: "already_terminal", ExpectedRunID: expectedRunID, Run: &active}, nil
 	}
 	if active.Status == RunStatusCancelling {
-		return RunInterruptResult{Interrupted: true, ExpectedRunID: expectedRunID, Run: &active}, nil
+		return RunInterruptResult{Interrupted: true, Reason: "already_cancelling", ExpectedRunID: expectedRunID, Run: &active}, nil
 	}
 
 	run, err := scanRun(tx.QueryRow(ctx, `
@@ -1043,19 +1043,14 @@ func projectMessage(ctx context.Context, exec sqlProjector, event protocol.Unive
 	if event.SessionID == "" {
 		return nil
 	}
-	messageID := projectionItemID(event)
+	messageID := projectionMessageID(event)
 	switch event.Type {
-	case protocol.EventItemStarted:
+	case protocol.EventMessageStarted:
 		if messageID == "" {
 			return nil
 		}
 		return upsertMessage(ctx, exec, event, messageID, MessageStatusStreaming, nil)
-	case protocol.EventItemDelta:
-		if messageID == "" {
-			return nil
-		}
-		return upsertMessage(ctx, exec, event, messageID, MessageStatusStreaming, nil)
-	case protocol.EventItemCompleted:
+	case protocol.EventMessageCompleted:
 		if messageID == "" {
 			return nil
 		}
@@ -1165,31 +1160,19 @@ func nullIfEmpty(value string) any {
 	return value
 }
 
-func projectionItemID(event protocol.UniversalEvent) string {
-	if event.ItemID != "" {
-		return event.ItemID
-	}
-	if event.Item != nil {
-		return event.Item.ID
-	}
-	return ""
+func projectionMessageID(event protocol.UniversalEvent) string {
+	return event.MessageID
 }
 
 func eventRole(event protocol.UniversalEvent) string {
 	if event.Role != "" {
 		return event.Role
 	}
-	if event.Item != nil && event.Item.Role != "" {
-		return event.Item.Role
-	}
 	return "assistant"
 }
 
 func eventBlocks(event protocol.UniversalEvent) []protocol.UniversalBlock {
-	if event.Item == nil {
-		return nil
-	}
-	return event.Item.Content
+	return event.Content
 }
 
 func errorMessageID(event protocol.UniversalEvent) string {
@@ -1258,5 +1241,5 @@ func scanRun(row pgx.Row) (SessionRun, error) {
 }
 
 func isTerminalRunStatus(status string) bool {
-	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled
+	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled || status == RunStatusTimedOut
 }

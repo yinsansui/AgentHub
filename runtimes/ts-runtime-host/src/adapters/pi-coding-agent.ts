@@ -27,7 +27,14 @@ type ToolCallContent = { type: "toolCall"; id: string; name: string; arguments: 
 type AssistantMessage = { role: "assistant"; content: Array<TextContent | ThinkingContent | ToolCallContent>; errorMessage?: string };
 type MessageUpdateEvent = AgentSessionEvent & {
   type: "message_update";
-  assistantMessageEvent?: { type?: string; delta?: string };
+  assistantMessageEvent?: {
+    type?: string;
+    contentIndex?: number;
+    delta?: string;
+    content?: string;
+    toolCall?: ToolCallContent;
+    partial?: AssistantMessage;
+  };
 };
 type ProviderConfig = Parameters<ModelRegistry["registerProvider"]>[1];
 type RegisteredModel = NonNullable<ProviderConfig["models"]>[number];
@@ -46,7 +53,7 @@ interface ActiveRunState {
   command: RunCommand;
   emit: RuntimeEventSink;
   assistantIndex: number;
-  currentAssistantItemId?: string;
+  currentAssistantMessageId?: string;
 }
 
 export class PiCodingAgentAdapter implements RuntimeAdapter {
@@ -151,26 +158,22 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
         return;
       case "message_start":
         if (event.message.role !== "assistant") return;
-        active.currentAssistantItemId = `msg_${command.runId}_${active.assistantIndex++}`;
+        active.currentAssistantMessageId = `msg_${command.runId}_${active.assistantIndex++}`;
         emit({
-          ...baseEvent("item.started", command),
-          itemId: active.currentAssistantItemId,
+          ...baseEvent("message.started", command),
+          messageId: active.currentAssistantMessageId,
           role: "assistant",
-          item: { id: active.currentAssistantItemId, type: "message", role: "assistant" },
         });
         return;
       case "message_update": {
         const update = event as MessageUpdateEvent;
-        if (update.message.role !== "assistant" || update.assistantMessageEvent?.type !== "text_delta") return;
-        const delta = update.assistantMessageEvent.delta ?? "";
-        if (!delta) return;
-        const itemId = active.currentAssistantItemId ?? `msg_${command.runId}_${active.assistantIndex}`;
-        emit({ ...baseEvent("item.delta", command), itemId, role: "assistant", delta });
+        if (update.message.role !== "assistant") return;
+        this.emitContentEvent(command, emit, active.currentAssistantMessageId ?? `msg_${command.runId}_${active.assistantIndex}`, update.assistantMessageEvent);
         return;
       }
       case "message_end":
         if (event.message.role !== "assistant") return;
-        this.emitCompletedMessage(command, emit, active.currentAssistantItemId ?? `msg_${command.runId}_${active.assistantIndex}`, event.message as AssistantMessage);
+        this.emitCompletedMessage(command, emit, active.currentAssistantMessageId ?? `msg_${command.runId}_${active.assistantIndex}`, event.message as AssistantMessage);
         return;
       case "agent_end":
         emit({ ...baseEvent("session.ended", command), metadata: { reason: "stop", adapter: "pi-coding-agent" } });
@@ -180,13 +183,40 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
     }
   }
 
-  private emitCompletedMessage(command: RunCommand, emit: RuntimeEventSink, itemId: string, message: AssistantMessage): void {
+  private emitContentEvent(command: RunCommand, emit: RuntimeEventSink, messageId: string, event: MessageUpdateEvent["assistantMessageEvent"]): void {
+    if (!event || typeof event.contentIndex !== "number") return;
+    const base = { ...baseEvent(contentEventType(event.type), command), messageId, contentIndex: event.contentIndex, role: "assistant" };
+    switch (event.type) {
+      case "text_start":
+      case "thinking_start":
+      case "toolcall_start":
+        emit(base);
+        return;
+      case "text_delta":
+      case "thinking_delta":
+      case "toolcall_delta":
+        if (!event.delta) return;
+        emit({ ...base, delta: event.delta, partial: blockPartial(event.partial, event.contentIndex) });
+        return;
+      case "text_end":
+      case "thinking_end":
+        emit({ ...base, block: { type: event.type === "text_end" ? "text" : "thinking", text: event.content ?? blockPartial(event.partial, event.contentIndex) } });
+        return;
+      case "toolcall_end":
+        emit({ ...base, block: toolCallBlock(event.toolCall ?? blockAt(event.partial, event.contentIndex)) });
+        return;
+      default:
+        return;
+    }
+  }
+
+  private emitCompletedMessage(command: RunCommand, emit: RuntimeEventSink, messageId: string, message: AssistantMessage): void {
     const blocks = assistantBlocks(message);
     emit({
-      ...baseEvent("item.completed", command),
-      itemId,
+      ...baseEvent("message.completed", command),
+      messageId,
       role: "assistant",
-      item: { id: itemId, type: "message", role: "assistant", content: blocks },
+      content: blocks,
       metadata: message.errorMessage ? { stopReason: "error", errorMessage: message.errorMessage } : undefined,
     });
   }
@@ -203,18 +233,68 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
 function assistantBlocks(message: AssistantMessage): UniversalBlock[] {
   const blocks: UniversalBlock[] = [];
   for (const content of message.content ?? []) {
-    if (content.type === "text") {
-      blocks.push({ type: "text", text: content.text });
-    } else if (content.type === "thinking") {
-      blocks.push({ type: "thinking", text: content.thinking });
-    } else if (content.type === "toolCall") {
-      blocks.push({ type: "tool_call", name: content.name, input: JSON.stringify(content.arguments ?? {}) });
-    }
+    blocks.push(blockFromContent(content));
   }
   if (blocks.length === 0 && message.errorMessage) {
     blocks.push({ type: "text", text: message.errorMessage });
   }
   return blocks;
+}
+
+function contentEventType(type: string | undefined): UniversalEvent["type"] {
+  switch (type) {
+    case "text_start":
+      return "text.started";
+    case "text_delta":
+      return "text.delta";
+    case "text_end":
+      return "text.completed";
+    case "thinking_start":
+      return "thinking.started";
+    case "thinking_delta":
+      return "thinking.delta";
+    case "thinking_end":
+      return "thinking.completed";
+    case "toolcall_start":
+      return "tool_call.started";
+    case "toolcall_delta":
+      return "tool_call.delta";
+    case "toolcall_end":
+      return "tool_call.completed";
+    default:
+      return "text.delta";
+  }
+}
+
+function blockPartial(message: AssistantMessage | undefined, contentIndex: number): string {
+  const block = blockAt(message, contentIndex);
+  if (!block) return "";
+  if (block.type === "text") return block.text;
+  if (block.type === "thinking") return block.thinking;
+  if (block.type === "toolCall") return JSON.stringify(block.arguments ?? {});
+  return "";
+}
+
+function blockAt(message: AssistantMessage | undefined, contentIndex: number): TextContent | ThinkingContent | ToolCallContent | undefined {
+  return message?.content?.[contentIndex];
+}
+
+function toolCallBlock(content: unknown): UniversalBlock {
+  if (content && typeof content === "object" && (content as { type?: string }).type === "toolCall") {
+    const toolCall = content as ToolCallContent;
+    return blockFromContent(toolCall);
+  }
+  return { type: "tool_call" };
+}
+
+function blockFromContent(content: TextContent | ThinkingContent | ToolCallContent): UniversalBlock {
+  if (content.type === "text") {
+    return { type: "text", text: content.text };
+  }
+  if (content.type === "thinking") {
+    return { type: "thinking", text: content.thinking };
+  }
+  return { type: "tool_call", name: content.name, input: JSON.stringify(content.arguments ?? {}) };
 }
 
 function runtimeModelConfig(): RuntimeModelConfig {

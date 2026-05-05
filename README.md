@@ -17,7 +17,7 @@ control-plane
   -> tasks + sessions + session_runs lifecycle state
 ```
 
-The durable control-plane store uses PostgreSQL when `AGENTHUB_DATABASE_URL` is configured. Runtime events are appended to `session_events` with a global `BIGSERIAL` cursor, message metadata is projected into `messages`, completed item content is expanded into `message_blocks`, and `tasks` / `sessions` / `session_runs` track the active execution lifecycle. Streaming `item.delta` events stay in the event log and are not treated as final blocks. If no database URL is configured, the server falls back to an in-memory development store only.
+The durable control-plane store uses PostgreSQL when `AGENTHUB_DATABASE_URL` is configured. Runtime events are appended to `session_events` with a global `BIGSERIAL` cursor, message metadata is projected into `messages`, completed message content is expanded into `message_blocks`, and `tasks` / `sessions` / `session_runs` track the active execution lifecycle. Streaming block delta events stay in the event log and are not treated as final blocks. If no database URL is configured, the server falls back to an in-memory development store only.
 
 Session reads follow a snapshot + replay + live pattern:
 

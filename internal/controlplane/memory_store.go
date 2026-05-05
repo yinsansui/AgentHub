@@ -446,7 +446,7 @@ func (s *MemoryStore) RequestRunInterrupt(ctx context.Context, sessionID, expect
 		return RunInterruptResult{Interrupted: false, Reason: "already_terminal", ExpectedRunID: expectedRunID, Run: &active}, nil
 	}
 	if active.Status == RunStatusCancelling {
-		return RunInterruptResult{Interrupted: true, ExpectedRunID: expectedRunID, Run: &active}, nil
+		return RunInterruptResult{Interrupted: true, Reason: "already_cancelling", ExpectedRunID: expectedRunID, Run: &active}, nil
 	}
 	now := time.Now().UTC()
 	active.Status = RunStatusCancelling
@@ -482,19 +482,14 @@ func (s *MemoryStore) projectMessage(event protocol.UniversalEvent) {
 	if event.SessionID == "" {
 		return
 	}
-	messageID := projectionItemID(event)
+	messageID := projectionMessageID(event)
 	switch event.Type {
-	case protocol.EventItemStarted:
+	case protocol.EventMessageStarted:
 		if messageID == "" {
 			return
 		}
 		s.upsertMessage(event, messageID, MessageStatusStreaming, nil)
-	case protocol.EventItemDelta:
-		if messageID == "" {
-			return
-		}
-		s.upsertMessage(event, messageID, MessageStatusStreaming, nil)
-	case protocol.EventItemCompleted:
+	case protocol.EventMessageCompleted:
 		if messageID == "" {
 			return
 		}

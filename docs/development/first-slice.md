@@ -11,7 +11,7 @@
 7. `internal/runtime/process` + `runtimes/ts-runtime-host`：通用进程型 runtime-host；首个 adapter 通过 npm package `@mariozechner/pi-coding-agent` 接入真实 pi-coding-agent runtime。旧的 Go 侧 CLI/JSONL fallback 已删除。
 8. `pkg/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
 9. `pkg/sse`：SSE 读写工具。
-10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection + `tasks` / `sessions` / `session_runs` run lifecycle；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
+10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection + `tasks` / `sessions` / `session_runs` run lifecycle；`session_events.id` 是全局递增 replay cursor，`message.completed.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
 
 ## 本地验证
 
@@ -41,7 +41,7 @@ make smoke-real-runtime
 5. `POST /workspaces/{workspaceId}/sessions` 创建 task + session + first turn，并锁定 `session.modelId`。
 6. AgentPod 启动 `ts-runtime-host` / `pi-coding-agent`，使用 control-plane 注入的 LLM env 调真实模型。
 7. run 完成后，`GET /sessions/{sessionId}/state` 没有 active run，`latestEventId` 前进。
-8. `GET /sessions/{sessionId}/events?after=0` 可 replay，并包含 `item.completed`。
+8. `GET /sessions/{sessionId}/events?after=0` 可 replay，并包含 `run.started`、`message.completed`、`run.completed`。
 9. `GET /sessions/{sessionId}/messages` 可读取 message projection，并包含 smoke marker。
 
 常用参数：
@@ -55,6 +55,7 @@ make smoke-real-runtime
 | `AGENTHUB_SMOKE_DATABASE_URL` | 无 | 指定后复用已有 Postgres，不启动临时 container |
 | `AGENTHUB_SMOKE_KEEP_ARTIFACTS` | `0` | 失败时总是保留日志；成功时设为 `1` 可保留 `.agenthub/smoke/<run>` |
 | `AGENTHUB_SMOKE_SKIP_BUILD` | `0` | 设为 `1` 时跳过 `ts-runtime-host` build |
+| `AGENTHUB_RUN_TIMEOUT` | `30m` | control-plane 全局 run timeout |
 
 如果 control-plane 运行在宿主机而不是 Docker network 内，默认的 `http://agent-pod-{workspaceId}:3001` 不能被宿主机 DNS 解析。此时可以先用本地 agent-pod 进程验证 SSE 链路：
 

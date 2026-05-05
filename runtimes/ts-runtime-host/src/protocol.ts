@@ -21,25 +21,41 @@ export interface ShutdownCommand {
 }
 
 export interface UniversalEvent {
-  type: "session.started" | "item.started" | "item.delta" | "item.completed" | "session.ended" | "error";
+  type:
+    | "session.started"
+    | "session.ended"
+    | "error"
+    | "run.started"
+    | "run.cancelling"
+    | "run.completed"
+    | "run.failed"
+    | "run.cancelled"
+    | "run.timed_out"
+    | "message.started"
+    | "message.completed"
+    | "text.started"
+    | "text.delta"
+    | "text.completed"
+    | "thinking.started"
+    | "thinking.delta"
+    | "thinking.completed"
+    | "tool_call.started"
+    | "tool_call.delta"
+    | "tool_call.completed";
   timestamp: string;
   workspaceId?: string;
   taskId?: string;
   sessionId?: string;
   runId?: string;
-  itemId?: string;
-  role?: string;
-  item?: UniversalItem;
-  delta?: string;
-  error?: EventErrorPayload;
-  metadata?: Record<string, unknown>;
-}
-
-export interface UniversalItem {
-  id: string;
-  type: string;
+  messageId?: string;
+  contentIndex?: number;
   role?: string;
   content?: UniversalBlock[];
+  block?: UniversalBlock;
+  delta?: string;
+  partial?: string;
+  error?: EventErrorPayload;
+  metadata?: Record<string, unknown>;
 }
 
 export interface UniversalBlock {

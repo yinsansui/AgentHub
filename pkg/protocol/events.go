@@ -3,12 +3,26 @@ package protocol
 import "time"
 
 const (
-	EventSessionStarted = "session.started"
-	EventItemStarted    = "item.started"
-	EventItemDelta      = "item.delta"
-	EventItemCompleted  = "item.completed"
-	EventSessionEnded   = "session.ended"
-	EventError          = "error"
+	EventSessionStarted    = "session.started"
+	EventSessionEnded      = "session.ended"
+	EventError             = "error"
+	EventRunStarted        = "run.started"
+	EventRunCancelling     = "run.cancelling"
+	EventRunCompleted      = "run.completed"
+	EventRunFailed         = "run.failed"
+	EventRunCancelled      = "run.cancelled"
+	EventRunTimedOut       = "run.timed_out"
+	EventMessageStarted    = "message.started"
+	EventMessageCompleted  = "message.completed"
+	EventTextStarted       = "text.started"
+	EventTextDelta         = "text.delta"
+	EventTextCompleted     = "text.completed"
+	EventThinkingStarted   = "thinking.started"
+	EventThinkingDelta     = "thinking.delta"
+	EventThinkingCompleted = "thinking.completed"
+	EventToolCallStarted   = "tool_call.started"
+	EventToolCallDelta     = "tool_call.delta"
+	EventToolCallCompleted = "tool_call.completed"
 )
 
 type TurnRequest struct {
@@ -120,25 +134,21 @@ type InterruptRequest struct {
 }
 
 type UniversalEvent struct {
-	Type        string             `json:"type"`
-	Timestamp   string             `json:"timestamp"`
-	WorkspaceID string             `json:"workspaceId,omitempty"`
-	TaskID      string             `json:"taskId,omitempty"`
-	SessionID   string             `json:"sessionId,omitempty"`
-	RunID       string             `json:"runId,omitempty"`
-	ItemID      string             `json:"itemId,omitempty"`
-	Role        string             `json:"role,omitempty"`
-	Item        *UniversalItem     `json:"item,omitempty"`
-	Delta       string             `json:"delta,omitempty"`
-	Error       *EventErrorPayload `json:"error,omitempty"`
-	Metadata    map[string]any     `json:"metadata,omitempty"`
-}
-
-type UniversalItem struct {
-	ID      string           `json:"id"`
-	Type    string           `json:"type"`
-	Role    string           `json:"role,omitempty"`
-	Content []UniversalBlock `json:"content,omitempty"`
+	Type         string             `json:"type"`
+	Timestamp    string             `json:"timestamp"`
+	WorkspaceID  string             `json:"workspaceId,omitempty"`
+	TaskID       string             `json:"taskId,omitempty"`
+	SessionID    string             `json:"sessionId,omitempty"`
+	RunID        string             `json:"runId,omitempty"`
+	MessageID    string             `json:"messageId,omitempty"`
+	ContentIndex *int               `json:"contentIndex,omitempty"`
+	Role         string             `json:"role,omitempty"`
+	Content      []UniversalBlock   `json:"content,omitempty"`
+	Block        *UniversalBlock    `json:"block,omitempty"`
+	Delta        string             `json:"delta,omitempty"`
+	Partial      string             `json:"partial,omitempty"`
+	Error        *EventErrorPayload `json:"error,omitempty"`
+	Metadata     map[string]any     `json:"metadata,omitempty"`
 }
 
 type UniversalBlock struct {

@@ -301,8 +301,13 @@ if int(state.get("latestEventId") or 0) <= 0:
 event_items = events.get("events") or []
 if not event_items:
     raise SystemExit("event replay returned no events")
-if not any(item.get("type") == "item.completed" for item in event_items):
-    raise SystemExit("event replay has no item.completed")
+types = [item.get("type") for item in event_items]
+if "run.started" not in types:
+    raise SystemExit("event replay has no run.started")
+if "message.completed" not in types:
+    raise SystemExit("event replay has no message.completed")
+if "run.completed" not in types:
+    raise SystemExit("event replay has no run.completed")
 text = json.dumps(messages, ensure_ascii=False)
 if marker not in text:
     raise SystemExit(f"marker {marker!r} not found in messages projection")
