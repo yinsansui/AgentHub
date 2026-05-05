@@ -76,8 +76,12 @@ func (a PiCLIAdapter) RunTurn(ctx context.Context, req protocol.TurnRequest, emi
 	args := strings.Fields(a.Command)
 	args = append(args, "--mode", "json", req.Message)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	if a.WorkDir != "" {
-		cmd.Dir = a.WorkDir
+	workDir := strings.TrimSpace(req.SessionCWD)
+	if workDir == "" {
+		workDir = a.WorkDir
+	}
+	if workDir != "" {
+		cmd.Dir = workDir
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

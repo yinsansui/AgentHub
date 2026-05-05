@@ -34,6 +34,7 @@ type EventStore interface {
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
+	ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error)
 	Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error)
 	ListEventsBySession(ctx context.Context, sessionID string, afterID int64, limit int) ([]StoredEvent, error)
 	ListMessagesBySession(ctx context.Context, sessionID string) ([]MessageProjection, error)
@@ -109,6 +110,35 @@ type RunInterruptResult struct {
 	ExpectedRunID string      `json:"expectedRunId"`
 	ActiveRun     *SessionRun `json:"activeRun,omitempty"`
 	Run           *SessionRun `json:"run,omitempty"`
+}
+
+type SkillDefinition struct {
+	ID          string    `json:"id"`
+	Slug        string    `json:"slug"`
+	Source      string    `json:"source"`
+	ScopeType   string    `json:"scopeType"`
+	ScopeID     string    `json:"scopeId,omitempty"`
+	Name        string    `json:"name,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Version     int64     `json:"version"`
+	ContentHash string    `json:"contentHash"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type SkillFile struct {
+	ID          string    `json:"id"`
+	SkillID     string    `json:"skillId"`
+	Path        string    `json:"path"`
+	Content     string    `json:"content"`
+	ContentHash string    `json:"contentHash"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type SkillDefinitionWithFiles struct {
+	Definition SkillDefinition `json:"definition"`
+	Files      []SkillFile     `json:"files"`
 }
 
 type ActiveRunConflict struct {
@@ -230,6 +260,31 @@ CREATE TABLE IF NOT EXISTS message_blocks (
 CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages (session_id, created_at, message_id);
 CREATE INDEX IF NOT EXISTS idx_messages_workspace_session_created ON messages (workspace_id, session_id, created_at, message_id);
 CREATE INDEX IF NOT EXISTS idx_message_blocks_message_order ON message_blocks (session_id, message_id, block_index);
+CREATE TABLE IF NOT EXISTS skill_definitions (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL,
+  source TEXT NOT NULL,
+  scope_type TEXT NOT NULL DEFAULT 'global',
+  scope_id TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  version BIGINT NOT NULL DEFAULT 1,
+  content_hash TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS skill_files (
+  id TEXT PRIMARY KEY,
+  skill_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_definitions_scope_slug ON skill_definitions (source, scope_type, scope_id, slug);
+CREATE INDEX IF NOT EXISTS idx_skill_definitions_slug_source ON skill_definitions (slug, source, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_files_skill_path ON skill_files (skill_id, path);
 `)
 	return err
 }
@@ -268,6 +323,10 @@ func (s *Store) CreateSession(ctx context.Context, workspaceID, taskID, sessionI
 
 func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
 	return s.getSession(ctx, sessionID)
+}
+
+func (s *Store) ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
+	return s.listSkillCandidates(ctx, workspaceID)
 }
 
 func (s *Store) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {

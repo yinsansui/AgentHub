@@ -76,7 +76,7 @@ docs/
 
 1. `cmd/*` 只放可执行入口和依赖组装，不放业务逻辑。`main.go` 应该只读取配置、创建 server、启动监听。
 2. `internal/controlplane` 放控制面业务核心，包括 workspace 生命周期、session/turn 处理、AgentPod client、事件持久化。
-3. `internal/agentpod` 放容器内本地控制层，包括 HTTP 路由、turn runner、cancel、reload、shutdown。
+3. `internal/agentpod` 放容器内本地控制层，包括 HTTP 路由、session prepare、turn runner、cancel、shutdown。
 4. `internal/driver` 定义容器驱动接口；`internal/driver/docker` 是 Docker 实现。未来 K8s/VM/local process 只能新增 driver，不应污染 control-plane 主逻辑。
 5. `internal/runtime` 定义 AI runtime 接口；`internal/runtime/pi` 是 Pi Agent 适配。未来 Codex/Claude 只能新增 runtime adapter，不应改 AgentPodServer 主合同。
 6. `pkg/*` 只放可对外复用的纯合同或通用工具。当前只允许 `protocol` 和 `sse`，避免把业务代码放进 pkg。
@@ -98,7 +98,7 @@ docs/
 1. 创建 task
 2. 查看 task 执行过程
 3. 查看 agent 事件流输出
-4. 查看 task 关联的 repo、docs 和结果
+4. 查看 task 关联的 docs 和结果；repo 能力后续由 repo plugin 提供
 
 ---
 
@@ -188,8 +188,7 @@ user-portal / admin-console
 第一版约束：
 
 1. 一个 `task` 固定绑定一个 `workspace_id`
-2. 一个 `task` 可以关联多个 repo
-3. 一个 `task` 拥有自己的独立工作目录
+2. 一个 `task` 拥有自己的独立工作目录
 
 ---
 
@@ -200,10 +199,9 @@ user-portal / admin-console
 它的作用不是表达一个任务本身，而是提供：
 
 1. 文件系统
-2. 代码仓库目录
-3. 技能目录
-4. 文档目录
-5. 运行时进程环境
+2. 技能目录
+3. 文档目录
+4. 运行时进程环境
 
 第一版约束：
 
@@ -223,9 +221,9 @@ user-portal / admin-console
 
 主要职责：
 
-1. 提供 `/health`、`/info`、`/turn`、`/sessions/:sessionId/reconnect`、`/sessions/:sessionId/cancel`、`/reload`、`/shutdown`。
-2. 初始化 workspace/task 目录。
-3. 管理 Pi Agent Core 的执行、中断和 reload。
+1. 提供 `/health`、`/info`、`/sessions/:sessionId/prepare`、`/turn`、`/sessions/:sessionId/reconnect`、`/sessions/:sessionId/cancel`、`/shutdown`。
+2. 初始化 workspace/task/session 目录。
+3. 管理 Pi Agent Core 的执行和中断。
 4. 将 Pi Agent 原始事件映射为 AgentHub `UniversalEvent`。
 5. 做基础健康检查。
 
@@ -276,27 +274,103 @@ user-portal / admin-console
 
 ```text
 /workspace/tasks/<taskId>/
-  .agents/skills/
-  .claude/skills/
-  repos/
   docs/
+  sessions/
+    <sessionId>/
+      .agents/skills/
+      .claude/skills/
+      .agenthub/skills.manifest.json
+      docs -> ../../docs
+      AGENTS.md -> ../../AGENTS.md
+      CLAUDE.md -> ../../CLAUDE.md
   AGENTS.md
   CLAUDE.md
 ```
 
 说明：
 
-1. `repos/` 为当前 task 可访问的代码仓库目录
-2. 一个 `task` 可以关联多个 repo
-3. `docs/` 为当前 task 的文档目录
-4. `.agents/skills/` 和 `.claude/skills/` 为 task 可用技能目录
-5. `AGENTS.md` 和 `CLAUDE.md` 为当前 task 的任务级指令文件
+1. `docs/` 为当前 task 的共享文档目录
+2. `sessions/<sessionId>/` 是 Agent Core 的真实 cwd
+3. `.agents/skills/` 和 `.claude/skills/` 位于每个 session 自己的 cwd 内，表达 session 创建时冻结的 skill snapshot
+4. `sessions/<sessionId>/docs` 软链接到 task 层级共享目录
+5. `AGENTS.md` 和 `CLAUDE.md` 为当前 task 的任务级指令文件，并软链接到每个 session cwd
+
+`repos/` 不由平台核心创建；仓库目录、clone 状态和 session 内 repo 可见性后续由 repo plugin 负责。
 
 这意味着即使多个 task 运行在同一个 workspace 中，它们的任务目录也必须彼此隔离。
 
 ---
 
-## 8. Prompt 与上下文组装边界
+## 8. MCP 与 Skill 加载机制
+
+当前阶段优先完成平台通用的 MCP / skill 加载机制，暂缓 repo plugin 等具体业务插件。第一版 skill 不做实时 reload，skill 修改只影响之后创建的新 session。
+
+### 8.1 长生命周期：Task Runtime Environment
+
+`task` 创建或首次运行前，`AgentPodServer` 负责准备 task 级共享目录：
+
+```text
+/workspace/tasks/<taskId>/
+  docs/
+  sessions/
+  AGENTS.md
+  CLAUDE.md
+```
+
+该环境是长生命周期对象，原则是：
+
+1. `docs/` 由同一个 task 下的多个 session 共享。
+2. `AGENTS.md` 和 `CLAUDE.md` 是 task 级指令文件。
+3. task 层不直接放 skill；skill 放在每个 session 自己的 cwd 内。
+4. task 目录不随每次 run 全量重建。
+5. `repos/` 由 repo plugin 在需要时创建，平台核心不预建。
+
+因此平台不应把所有 skill 内容或全量 tool schema 每次都塞进 run 输入。
+
+### 8.2 中生命周期：Session Runtime Environment
+
+`session` 创建时绑定到一个 `task`，由 control-plane 解析 skill 列表并按覆盖优先级生成最终 skill snapshot：
+
+```text
+user > plugin > workspace > platform_builtin
+```
+
+同一个 `slug` 只 materialize 一个最终版本，目录不带 source 前缀：
+
+```text
+/workspace/tasks/<taskId>/sessions/<sessionId>/
+  .agents/skills/<slug>/
+  .claude/skills/<slug>/
+```
+
+已有 session 的 skill 文件不再随 `skill_definitions` / `skill_files` 后续修改而变化；如果需要新版 skill，需要创建新的 session。
+
+### 8.3 短生命周期：Run Invocation Context
+
+每次 run 只携带最小执行身份和用户输入：
+
+1. `workspaceId`
+2. `taskId`
+3. `sessionId`
+4. `runId`
+5. 用户本轮输入
+6. `source`
+7. 当前 session 工作目录
+
+run 启动前只需要确认对应 session cwd 已准备完成，并把 Agent Core cwd 设为 `/workspace/tasks/<taskId>/sessions/<sessionId>`；不应在 run 级别重复构建完整 RuntimeBundle。
+
+### 8.4 Skill 与 MCP 的边界
+
+Skill 和 MCP 是两种不同扩展面：
+
+1. skill 提供知识、指令、工作流说明，适合渐进加载，不直接表达可执行副作用。
+2. MCP 提供可调用 tool，包含 tool schema、执行入口和返回结果。
+3. skill 可以提示 agent 何时使用某个 MCP tool，但不能替代 MCP tool 注册。
+4. MCP tool 可以读写 task/session 目录，但必须受 task scope 和平台权限约束。
+
+---
+
+## 9. Prompt 与上下文组装边界
 
 `control-plane` 不直接负责拼接最终给某个具体 agent-core 的原始 prompt 文本。
 
@@ -309,13 +383,13 @@ user-portal / admin-console
 5. 用户本轮输入
 6. `source`
 
-### 8.1 `control-plane`
+### 9.1 `control-plane`
 
 负责维护上面的执行身份链路，并把本轮输入传给 runtime adapter。
 
 ---
 
-### 8.2 `runtime adapter`
+### 9.2 `runtime adapter`
 
 负责把本轮 run 请求渲染为底层 runtime 所需的具体输入格式，例如：
 
@@ -331,7 +405,7 @@ user-portal / admin-console
 
 ---
 
-## 9. 事件模型
+## 10. 事件模型
 
 第一版采用 `UniversalEvent` 作为平台内部事件合同。
 
@@ -367,7 +441,7 @@ user-portal / admin-console
 
 ---
 
-## 10. `AgentPodServer / Supervisor` 是否必须存在
+## 11. `AgentPodServer / Supervisor` 是否必须存在
 
 当前判断：必须存在，但第一阶段可以把本地控制层和 Pi adapter 合并在同一个二进制内。
 
@@ -375,16 +449,16 @@ user-portal / admin-console
 
 1. `control-plane` 不适合直接深入容器内部管理底层 runtime 进程。
 2. task/workspace 目录初始化逻辑天然属于容器本地。
-3. Pi Agent Core 的执行、中断、reload 更适合由本地进程控制。
+3. Pi Agent Core 的执行和中断更适合由本地进程控制。
 4. 中断、健康检查和事件桥接也更适合在容器内收口。
 
 第一阶段实现为 `cmd/agent-pod` 单进程入口 + `internal/agentpod` 核心；后续如果 Pi Agent SDK/JSON-RPC 接入复杂度上升，再拆成 Supervisor + adapter 进程。
 
 ---
 
-## 11. 技术选型建议
+## 12. 技术选型建议
 
-### 11.1 WebUI
+### 12.1 WebUI
 
 前端统一使用：
 
@@ -393,7 +467,7 @@ user-portal / admin-console
 
 ---
 
-### 11.2 `control-plane`
+### 12.2 `control-plane`
 
 建议使用：
 
@@ -408,7 +482,7 @@ user-portal / admin-console
 
 ---
 
-### 11.3 `AgentPodServer / Supervisor`
+### 12.3 `AgentPodServer / Supervisor`
 
 建议使用：
 
@@ -422,7 +496,7 @@ user-portal / admin-console
 
 ---
 
-### 11.4 `runtime adapter`
+### 12.4 `runtime adapter`
 
 建议固定使用：
 
@@ -436,7 +510,7 @@ user-portal / admin-console
 
 ---
 
-## 12. 当前第一版已确定约束
+## 13. 当前第一版已确定约束
 
 当前已确认的第一版约束如下：
 
@@ -449,24 +523,24 @@ user-portal / admin-console
 7. `1 workspace = 1 agent-pod`，turn 先串行。
 8. AgentPodServer 内部接口使用 per-pod bearer token。
 9. 事件流采用 `UniversalEvent`。
-10. 第一阶段 platform MCP tools 只做 `read_memory` 和 `update_memory`。
+10. 第一阶段先完成通用 MCP / skill 加载机制，不先抽象完整 plugin 体系。
 
 ---
 
-## 13. 当前仍待后续细化的部分
+## 14. 当前仍待后续细化的部分
 
 以下内容本轮先不展开，但后续需要继续细化：
 
 1. Pi Agent SDK/JSON-RPC 的正式接入方式
 2. run 超时、重试与更完整观测模型
-3. repo 插件扩展点与 task 目录准备时机
+3. repo plugin：基于通用 MCP / skill 机制之后再实现，能力包括 repo catalog、UI 可选仓库列表、clone 状态记录、`repo.clone` MCP tool、repo knowledge skill、以及 clone 到 task `repos/` 目录
 4. task 目录结构与 workspace 复用策略
 5. workspace 的复用、回收和资源限制策略
 6. 多 runtime 协作模型
 
 ---
 
-## 14. 总结
+## 15. 总结
 
 第一版的核心原则是：
 

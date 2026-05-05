@@ -16,10 +16,11 @@ import (
 )
 
 type Server struct {
-	workspaceID string
-	runtimeID   string
-	token       string
-	adapter     runtime.Runtime
+	workspaceID  string
+	runtimeID    string
+	token        string
+	workspaceDir string
+	adapter      runtime.Runtime
 
 	mu    sync.Mutex
 	turns map[string]trackedTurn
@@ -31,25 +32,28 @@ type trackedTurn struct {
 }
 
 func NewServer(workspaceID, runtimeID, token string, adapter runtime.Runtime) *Server {
-	return &Server{workspaceID: workspaceID, runtimeID: runtimeID, token: token, adapter: adapter, turns: map[string]trackedTurn{}}
+	return &Server{workspaceID: workspaceID, runtimeID: runtimeID, token: token, workspaceDir: "/workspace", adapter: adapter, turns: map[string]trackedTurn{}}
 }
 
 func NewServerFromEnv() *Server {
 	workspaceID := env("WORKSPACE_ID", "local")
 	runtimeID := env("RUNTIME_ID", "pi-agent")
 	token := os.Getenv("AGENTHUB_INTERNAL_TOKEN")
-	adapter := runtime.Runtime(piagent.PiCLIAdapter{Command: os.Getenv("PI_AGENT_COMMAND"), WorkDir: env("WORKSPACE_DIR", "/workspace")})
-	return NewServer(workspaceID, runtimeID, token, adapter)
+	workspaceDir := env("WORKSPACE_DIR", "/workspace")
+	adapter := runtime.Runtime(piagent.PiCLIAdapter{Command: os.Getenv("PI_AGENT_COMMAND"), WorkDir: workspaceDir})
+	server := NewServer(workspaceID, runtimeID, token, adapter)
+	server.workspaceDir = workspaceDir
+	return server
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /info", s.withAuth(s.handleInfo))
+	mux.HandleFunc("POST /sessions/{sessionId}/prepare", s.withAuth(s.handlePrepareSession))
 	mux.HandleFunc("POST /turn", s.withAuth(s.handleTurn))
 	mux.HandleFunc("POST /sessions/{sessionId}/reconnect", s.withAuth(s.handleReconnect))
 	mux.HandleFunc("POST /sessions/{sessionId}/cancel", s.withAuth(s.handleCancel))
-	mux.HandleFunc("POST /reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("POST /shutdown", s.withAuth(s.handleShutdown))
 	return mux
 }
@@ -59,7 +63,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	_ = json.NewEncoder(w).Encode(map[string]any{"workspaceId": s.workspaceID, "runtimeId": s.runtimeID, "capabilities": []string{"turn", "cancel", "reload", "sse-universal-event"}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"workspaceId": s.workspaceID, "runtimeId": s.runtimeID, "capabilities": []string{"prepare-session", "turn", "cancel", "sse-universal-event"}})
+}
+
+func (s *Server) handlePrepareSession(w http.ResponseWriter, r *http.Request) {
+	var req protocol.PrepareSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.WorkspaceID == "" {
+		req.WorkspaceID = s.workspaceID
+	}
+	if req.SessionID == "" {
+		req.SessionID = r.PathValue("sessionId")
+	}
+	if req.TaskID == "" || req.SessionID == "" {
+		http.Error(w, "taskId and sessionId are required", http.StatusBadRequest)
+		return
+	}
+	sessionDir, err := s.prepareSession(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"prepared": true, "workspaceId": req.WorkspaceID, "taskId": req.TaskID, "sessionId": req.SessionID, "sessionCwd": sessionDir})
 }
 
 func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request) {
@@ -74,10 +102,11 @@ func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request) {
 	if req.Source == "" {
 		req.Source = "api"
 	}
-	if req.RunID == "" || req.SessionID == "" || req.Message == "" {
-		http.Error(w, "sessionId, runId and message are required", http.StatusBadRequest)
+	if req.RunID == "" || req.TaskID == "" || req.SessionID == "" || req.Message == "" {
+		http.Error(w, "taskId, sessionId, runId and message are required", http.StatusBadRequest)
 		return
 	}
+	req.SessionCWD = s.sessionDir(req.TaskID, req.SessionID)
 	ctx, cancel := context.WithCancel(r.Context())
 	s.track(req.SessionID, req.RunID, cancel)
 	defer s.untrack(req.SessionID, req.RunID)
@@ -116,10 +145,6 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	turn.cancel()
 	_ = json.NewEncoder(w).Encode(map[string]any{"cancelled": true, "sessionId": sessionID, "runId": req.ExpectedRunID})
-}
-
-func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	_ = json.NewEncoder(w).Encode(map[string]any{"reloaded": true, "scope": "next_turn"})
 }
 
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {

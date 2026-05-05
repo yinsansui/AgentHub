@@ -25,19 +25,32 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 	taskID := newTaskID()
 
 	var turn protocol.TurnRequest
-	var token string
 	if req.FirstTurn != nil {
 		if strings.TrimSpace(req.FirstTurn.Message) == "" {
 			http.Error(w, "firstTurn.message is required", http.StatusBadRequest)
 			return
 		}
-		var ok bool
-		token, ok = s.workspaceExecutionToken(r.Context(), workspaceID)
-		if !ok {
-			http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
-			return
-		}
 		turn = turnRequestFromFirstTurn(workspaceID, taskID, sessionID, req.FirstTurn)
+	}
+
+	token, ok := s.workspaceExecutionToken(r.Context(), workspaceID)
+	if !ok {
+		http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
+		return
+	}
+	skills, err := s.resolveSessionSkills(r.Context(), workspaceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.pods.PrepareSession(r.Context(), workspaceID, token, protocol.PrepareSessionRequest{
+		WorkspaceID: workspaceID,
+		TaskID:      taskID,
+		SessionID:   sessionID,
+		Skills:      skills,
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	task, session, err := s.store.CreateSession(r.Context(), workspaceID, taskID, sessionID, req)
@@ -145,12 +158,11 @@ func (s *Server) workspaceExecutionToken(ctx context.Context, workspaceID string
 
 func turnRequestFromFirstTurn(workspaceID, taskID, sessionID string, firstTurn *protocol.FirstTurnRequest) protocol.TurnRequest {
 	turn := protocol.TurnRequest{
-		WorkspaceID:      workspaceID,
-		TaskID:           taskID,
-		SessionID:        sessionID,
-		Message:          firstTurn.Message,
-		ActiveSkillSlugs: firstTurn.ActiveSkillSlugs,
-		Source:           firstTurn.Source,
+		WorkspaceID: workspaceID,
+		TaskID:      taskID,
+		SessionID:   sessionID,
+		Message:     firstTurn.Message,
+		Source:      firstTurn.Source,
 	}
 	normalizeTurnRequest(&turn)
 	return turn
@@ -158,12 +170,11 @@ func turnRequestFromFirstTurn(workspaceID, taskID, sessionID string, firstTurn *
 
 func turnRequestFromCreateTurn(session SessionProjection, req protocol.CreateTurnRequest) protocol.TurnRequest {
 	turn := protocol.TurnRequest{
-		WorkspaceID:      session.WorkspaceID,
-		TaskID:           session.TaskID,
-		SessionID:        session.SessionID,
-		Message:          req.Message,
-		ActiveSkillSlugs: req.ActiveSkillSlugs,
-		Source:           req.Source,
+		WorkspaceID: session.WorkspaceID,
+		TaskID:      session.TaskID,
+		SessionID:   session.SessionID,
+		Message:     req.Message,
+		Source:      req.Source,
 	}
 	normalizeTurnRequest(&turn)
 	return turn

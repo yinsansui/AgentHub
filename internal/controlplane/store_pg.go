@@ -213,6 +213,84 @@ WHERE id = $1
 	return session, true, nil
 }
 
+func (s *Store) listSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+  d.id, d.slug, d.source, d.scope_type, d.scope_id, d.name, d.description,
+  d.version, d.content_hash, d.created_at, d.updated_at,
+  f.id, f.skill_id, f.path, f.content, f.content_hash, f.created_at, f.updated_at
+FROM skill_definitions d
+LEFT JOIN skill_files f ON f.skill_id = d.id
+WHERE
+  (d.source = $2 AND d.scope_type = 'global')
+  OR (d.source = $3 AND d.scope_type = 'workspace' AND d.scope_id = $1)
+  OR (d.source = $4 AND (d.scope_type = 'global' OR (d.scope_type = 'workspace' AND d.scope_id = $1)))
+  OR (d.source = $5 AND d.scope_type = 'global')
+ORDER BY d.slug ASC, d.source ASC, d.updated_at DESC, f.path ASC
+`, workspaceID, protocol.SkillSourcePlatformBuiltin, protocol.SkillSourceWorkspace, protocol.SkillSourcePlugin, protocol.SkillSourceUser)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	definitions := []SkillDefinitionWithFiles{}
+	byID := map[string]int{}
+	for rows.Next() {
+		var def SkillDefinition
+		var file SkillFile
+		var fileID sql.NullString
+		var fileSkillID sql.NullString
+		var filePath sql.NullString
+		var fileContent sql.NullString
+		var fileHash sql.NullString
+		var fileCreatedAt sql.NullTime
+		var fileUpdatedAt sql.NullTime
+		if err := rows.Scan(
+			&def.ID,
+			&def.Slug,
+			&def.Source,
+			&def.ScopeType,
+			&def.ScopeID,
+			&def.Name,
+			&def.Description,
+			&def.Version,
+			&def.ContentHash,
+			&def.CreatedAt,
+			&def.UpdatedAt,
+			&fileID,
+			&fileSkillID,
+			&filePath,
+			&fileContent,
+			&fileHash,
+			&fileCreatedAt,
+			&fileUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		idx, ok := byID[def.ID]
+		if !ok {
+			definitions = append(definitions, SkillDefinitionWithFiles{Definition: def})
+			idx = len(definitions) - 1
+			byID[def.ID] = idx
+		}
+		if fileID.Valid {
+			file.ID = fileID.String
+			file.SkillID = fileSkillID.String
+			file.Path = filePath.String
+			file.Content = fileContent.String
+			file.ContentHash = fileHash.String
+			if fileCreatedAt.Valid {
+				file.CreatedAt = fileCreatedAt.Time
+			}
+			if fileUpdatedAt.Valid {
+				file.UpdatedAt = fileUpdatedAt.Time
+			}
+			definitions[idx].Files = append(definitions[idx].Files, file)
+		}
+	}
+	return definitions, rows.Err()
+}
+
 func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

@@ -12,13 +12,56 @@ const (
 )
 
 type TurnRequest struct {
-	WorkspaceID      string   `json:"workspaceId"`
-	TaskID           string   `json:"taskId"`
-	SessionID        string   `json:"sessionId"`
-	RunID            string   `json:"runId"`
-	Message          string   `json:"message"`
-	ActiveSkillSlugs []string `json:"activeSkillSlugs"`
-	Source           string   `json:"source"`
+	WorkspaceID string `json:"workspaceId"`
+	TaskID      string `json:"taskId"`
+	SessionID   string `json:"sessionId"`
+	RunID       string `json:"runId"`
+	Message     string `json:"message"`
+	Source      string `json:"source"`
+	SessionCWD  string `json:"sessionCwd,omitempty"`
+}
+
+const (
+	SkillSourceUser            = "user"
+	SkillSourcePlugin          = "plugin"
+	SkillSourceWorkspace       = "workspace"
+	SkillSourcePlatformBuiltin = "platform_builtin"
+)
+
+type PrepareSessionRequest struct {
+	WorkspaceID string          `json:"workspaceId"`
+	TaskID      string          `json:"taskId"`
+	SessionID   string          `json:"sessionId"`
+	Skills      []ResolvedSkill `json:"skills"`
+}
+
+type ResolvedSkill struct {
+	Slug         string              `json:"slug"`
+	Source       string              `json:"source"`
+	DefinitionID string              `json:"definitionId"`
+	Version      int64               `json:"version"`
+	ContentHash  string              `json:"contentHash"`
+	Files        []ResolvedSkillFile `json:"files"`
+	Shadowed     []SkillShadow       `json:"shadowed,omitempty"`
+}
+
+type ResolvedSkillFile struct {
+	Path        string `json:"path"`
+	Content     string `json:"content"`
+	ContentHash string `json:"contentHash"`
+}
+
+type SkillShadow struct {
+	Source       string `json:"source"`
+	DefinitionID string `json:"definitionId"`
+	Version      int64  `json:"version"`
+	ContentHash  string `json:"contentHash"`
+}
+
+type SkillManifest struct {
+	SessionID string          `json:"sessionId"`
+	CreatedAt string          `json:"createdAt"`
+	Skills    []ResolvedSkill `json:"skills"`
 }
 
 type CreateSessionRequest struct {
@@ -28,15 +71,13 @@ type CreateSessionRequest struct {
 }
 
 type FirstTurnRequest struct {
-	Message          string   `json:"message"`
-	ActiveSkillSlugs []string `json:"activeSkillSlugs,omitempty"`
-	Source           string   `json:"source,omitempty"`
+	Message string `json:"message"`
+	Source  string `json:"source,omitempty"`
 }
 
 type CreateTurnRequest struct {
-	Message          string   `json:"message"`
-	ActiveSkillSlugs []string `json:"activeSkillSlugs,omitempty"`
-	Source           string   `json:"source,omitempty"`
+	Message string `json:"message"`
+	Source  string `json:"source,omitempty"`
 }
 
 type InterruptRequest struct {

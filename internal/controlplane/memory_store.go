@@ -21,6 +21,7 @@ type MemoryStore struct {
 	sessions    map[string]SessionProjection
 	activeRuns  map[string]string
 	runs        map[string]SessionRun
+	skills      map[string]SkillDefinitionWithFiles
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -33,6 +34,7 @@ func NewMemoryStore() *MemoryStore {
 		sessions:   map[string]SessionProjection{},
 		activeRuns: map[string]string{},
 		runs:       map[string]SessionRun{},
+		skills:     map[string]SkillDefinitionWithFiles{},
 	}
 }
 
@@ -85,6 +87,35 @@ func (s *MemoryStore) GetSession(ctx context.Context, sessionID string) (Session
 	}
 	session.Metadata = cloneMetadata(session.Metadata)
 	return session, true, nil
+}
+
+func (s *MemoryStore) ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]SkillDefinitionWithFiles, 0, len(s.skills))
+	for _, skill := range s.skills {
+		def := skill.Definition
+		switch def.Source {
+		case protocol.SkillSourcePlatformBuiltin, protocol.SkillSourceUser:
+			if def.ScopeType != "global" {
+				continue
+			}
+		case protocol.SkillSourceWorkspace:
+			if def.ScopeType != "workspace" || def.ScopeID != workspaceID {
+				continue
+			}
+		case protocol.SkillSourcePlugin:
+			if def.ScopeType != "global" && !(def.ScopeType == "workspace" && def.ScopeID == workspaceID) {
+				continue
+			}
+		default:
+			continue
+		}
+		files := make([]SkillFile, len(skill.Files))
+		copy(files, skill.Files)
+		out = append(out, SkillDefinitionWithFiles{Definition: def, Files: files})
+	}
+	return out, nil
 }
 
 func (s *MemoryStore) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {
