@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
   title TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -183,8 +183,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS session_runs (
   run_id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
-  session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
   status TEXT NOT NULL,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -225,8 +225,7 @@ CREATE TABLE IF NOT EXISTS message_blocks (
   input TEXT,
   output TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (session_id, message_id, block_index),
-  FOREIGN KEY (session_id, message_id) REFERENCES messages (session_id, message_id) ON DELETE CASCADE
+  PRIMARY KEY (session_id, message_id, block_index)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages (session_id, created_at, message_id);
 CREATE INDEX IF NOT EXISTS idx_messages_workspace_session_created ON messages (workspace_id, session_id, created_at, message_id);
