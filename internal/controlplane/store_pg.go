@@ -152,43 +152,55 @@ ORDER BY m.created_at ASC, m.message_id ASC, b.block_index ASC
 	return messages, rows.Err()
 }
 
-func (s *Store) createSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error) {
+func (s *Store) createSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error) {
 	if req.Metadata == nil {
 		req.Metadata = map[string]any{}
 	}
 	payload, err := json.Marshal(req.Metadata)
 	if err != nil {
-		return SessionProjection{}, err
+		return TaskProjection{}, SessionProjection{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TaskProjection{}, SessionProjection{}, err
+	}
+	defer tx.Rollback(ctx)
+	var task TaskProjection
+	err = tx.QueryRow(ctx, `
+INSERT INTO tasks (id, workspace_id, updated_at)
+VALUES ($1, $2, now())
+RETURNING id, workspace_id, created_at, updated_at
+`, taskID, workspaceID).Scan(&task.TaskID, &task.WorkspaceID, &task.CreatedAt, &task.UpdatedAt)
+	if err != nil {
+		return TaskProjection{}, SessionProjection{}, err
 	}
 	var session SessionProjection
 	var metadata []byte
-	err = s.pool.QueryRow(ctx, `
-INSERT INTO sessions (id, workspace_id, title, metadata, updated_at)
-VALUES ($1, $2, $3, $4::jsonb, now())
-ON CONFLICT (id) DO UPDATE SET
-  workspace_id = EXCLUDED.workspace_id,
-  title = EXCLUDED.title,
-  metadata = EXCLUDED.metadata,
-  updated_at = now()
-RETURNING id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
-`, sessionID, workspaceID, nullIfEmpty(req.Title), payload).Scan(&session.SessionID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
+	err = tx.QueryRow(ctx, `
+INSERT INTO sessions (id, task_id, workspace_id, title, metadata, updated_at)
+VALUES ($1, $2, $3, $4, $5::jsonb, now())
+RETURNING id, task_id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
+`, sessionID, taskID, workspaceID, nullIfEmpty(req.Title), payload).Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
-		return SessionProjection{}, err
+		return TaskProjection{}, SessionProjection{}, err
 	}
 	if len(metadata) > 0 {
 		_ = json.Unmarshal(metadata, &session.Metadata)
 	}
-	return session, nil
+	if err := tx.Commit(ctx); err != nil {
+		return TaskProjection{}, SessionProjection{}, err
+	}
+	return task, session, nil
 }
 
 func (s *Store) getSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
 	var session SessionProjection
 	var metadata []byte
 	err := s.pool.QueryRow(ctx, `
-SELECT id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
+SELECT id, task_id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
 FROM sessions
 WHERE id = $1
-`, sessionID).Scan(&session.SessionID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
+`, sessionID).Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionProjection{}, false, nil
 	}
@@ -209,11 +221,15 @@ func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (Sessio
 	defer tx.Rollback(ctx)
 
 	var activeRunID sql.NullString
-	if err := tx.QueryRow(ctx, `SELECT active_run_id FROM sessions WHERE id = $1 FOR UPDATE`, turn.SessionID).Scan(&activeRunID); err != nil {
+	var taskID string
+	if err := tx.QueryRow(ctx, `SELECT task_id, active_run_id FROM sessions WHERE id = $1 FOR UPDATE`, turn.SessionID).Scan(&taskID, &activeRunID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SessionRun{}, ErrSessionNotFound
 		}
 		return SessionRun{}, err
+	}
+	if turn.TaskID == "" {
+		turn.TaskID = taskID
 	}
 	if activeRunID.Valid && activeRunID.String != "" {
 		active, ok, err := queryRun(ctx, tx, turn.SessionID, activeRunID.String)
@@ -229,10 +245,10 @@ func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (Sessio
 	}
 
 	run, err := scanRun(tx.QueryRow(ctx, `
-INSERT INTO session_runs (run_id, session_id, workspace_id, status, started_at, updated_at)
-VALUES ($1, $2, $3, $4, now(), now())
-RETURNING run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
-`, turn.RunID, turn.SessionID, turn.WorkspaceID, RunStatusRunning))
+INSERT INTO session_runs (run_id, task_id, session_id, workspace_id, status, started_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, now(), now())
+RETURNING run_id, task_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+`, turn.RunID, turn.TaskID, turn.SessionID, turn.WorkspaceID, RunStatusRunning))
 	if err != nil {
 		return SessionRun{}, err
 	}
@@ -270,7 +286,7 @@ SET status = $3,
     error_message = $5,
     updated_at = now()
 WHERE session_id = $1 AND run_id = $2
-RETURNING run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+RETURNING run_id, task_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
 `, sessionID, runID, status, errorCode, errorMessage))
 	if err != nil {
 		return SessionRun{}, err
@@ -336,7 +352,7 @@ SET status = $3,
     cancel_requested_at = now(),
     updated_at = now()
 WHERE session_id = $1 AND run_id = $2
-RETURNING run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+RETURNING run_id, task_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
 `, sessionID, expectedRunID, RunStatusCancelling))
 	if err != nil {
 		return RunInterruptResult{}, err
@@ -547,7 +563,7 @@ type runQuerier interface {
 
 func queryRun(ctx context.Context, q runQuerier, sessionID, runID string) (SessionRun, bool, error) {
 	run, err := scanRun(q.QueryRow(ctx, `
-SELECT run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+SELECT run_id, task_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
 FROM session_runs
 WHERE session_id = $1 AND run_id = $2
 `, sessionID, runID))
@@ -568,6 +584,7 @@ func scanRun(row pgx.Row) (SessionRun, error) {
 	var cancelRequestedAt sql.NullTime
 	err := row.Scan(
 		&run.RunID,
+		&run.TaskID,
 		&run.SessionID,
 		&run.WorkspaceID,
 		&run.Status,

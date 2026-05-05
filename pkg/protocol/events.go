@@ -13,6 +13,7 @@ const (
 
 type TurnRequest struct {
 	WorkspaceID      string   `json:"workspaceId"`
+	TaskID           string   `json:"taskId"`
 	SessionID        string   `json:"sessionId"`
 	RunID            string   `json:"runId"`
 	Message          string   `json:"message"`
@@ -47,6 +48,7 @@ type UniversalEvent struct {
 	Type        string             `json:"type"`
 	Timestamp   string             `json:"timestamp"`
 	WorkspaceID string             `json:"workspaceId,omitempty"`
+	TaskID      string             `json:"taskId,omitempty"`
 	SessionID   string             `json:"sessionId,omitempty"`
 	RunID       string             `json:"runId,omitempty"`
 	ItemID      string             `json:"itemId,omitempty"`
@@ -82,6 +84,7 @@ func NewEvent(eventType string, req TurnRequest) UniversalEvent {
 		Type:        eventType,
 		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		WorkspaceID: req.WorkspaceID,
+		TaskID:      req.TaskID,
 		SessionID:   req.SessionID,
 		RunID:       req.RunID,
 	}

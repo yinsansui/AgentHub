@@ -32,7 +32,7 @@ type EventStore interface {
 	Ping(ctx context.Context) error
 	SaveWorkspaceToken(ctx context.Context, workspaceID string, token string) error
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
-	CreateSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error)
+	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
 	Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error)
 	ListEventsBySession(ctx context.Context, sessionID string, afterID int64, limit int) ([]StoredEvent, error)
@@ -64,8 +64,16 @@ type MessageProjection struct {
 	UpdatedAt   time.Time                   `json:"updatedAt"`
 }
 
+type TaskProjection struct {
+	TaskID      string    `json:"taskId"`
+	WorkspaceID string    `json:"workspaceId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
 type SessionProjection struct {
 	SessionID   string         `json:"sessionId"`
+	TaskID      string         `json:"taskId"`
 	WorkspaceID string         `json:"workspaceId"`
 	Title       string         `json:"title,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
@@ -75,6 +83,7 @@ type SessionProjection struct {
 
 type SessionRun struct {
 	RunID             string                      `json:"runId"`
+	TaskID            string                      `json:"taskId"`
 	SessionID         string                      `json:"sessionId"`
 	WorkspaceID       string                      `json:"workspaceId"`
 	Status            string                      `json:"status"`
@@ -155,8 +164,15 @@ CREATE TABLE IF NOT EXISTS session_events (
 CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events (session_id, id);
 CREATE INDEX IF NOT EXISTS idx_session_events_workspace_id_id ON session_events (workspace_id, id);
 CREATE INDEX IF NOT EXISTS idx_session_events_workspace_session_id ON session_events (workspace_id, session_id, id);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
   workspace_id TEXT NOT NULL,
   title TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -167,6 +183,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS session_runs (
   run_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
   session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
   workspace_id TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -179,15 +196,12 @@ CREATE TABLE IF NOT EXISTS session_runs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title TEXT;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS active_run_id TEXT;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS active_run_version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id_id ON tasks (workspace_id, id);
+CREATE INDEX IF NOT EXISTS idx_sessions_task_id_id ON sessions (task_id, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_active_run_id ON sessions (active_run_id);
 CREATE INDEX IF NOT EXISTS idx_session_runs_session_status ON session_runs (session_id, status, started_at);
 CREATE INDEX IF NOT EXISTS idx_session_runs_workspace_session ON session_runs (workspace_id, session_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_session_runs_task_session ON session_runs (task_id, session_id, started_at);
 CREATE TABLE IF NOT EXISTS messages (
   session_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -201,12 +215,6 @@ CREATE TABLE IF NOT EXISTS messages (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (session_id, message_id)
 );
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS run_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS error_code TEXT;
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS error_message TEXT;
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE TABLE IF NOT EXISTS message_blocks (
   session_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -255,8 +263,8 @@ func (s *Store) WorkspaceToken(ctx context.Context, workspaceID string) (string,
 	return token, true, nil
 }
 
-func (s *Store) CreateSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error) {
-	return s.createSession(ctx, workspaceID, sessionID, req)
+func (s *Store) CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error) {
+	return s.createSession(ctx, workspaceID, taskID, sessionID, req)
 }
 
 func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {

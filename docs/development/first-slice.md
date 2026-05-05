@@ -11,7 +11,7 @@
 7. `internal/runtime/pi`：Pi Agent CLI/JSONL 适配边界；未配置 `PI_AGENT_COMMAND` 时使用 stub 输出。
 8. `pkg/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
 9. `pkg/sse`：SSE 读写工具。
-10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection + `sessions` / `session_runs` run lifecycle；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
+10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection + `tasks` / `sessions` / `session_runs` run lifecycle；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
 
 ## 本地验证
 
@@ -44,7 +44,7 @@ curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
 
 1. 将 `PiCLIAdapter` 从 CLI JSONL 接入升级为 Pi Agent SDK/JSON-RPC 接入。
 2. 为 run lifecycle 增加超时、重试与更完整的观测指标。
-3. 继续扩展 task、repo 与 runtime 表。
+3. 将 repo 绑定沉到插件扩展点，避免进入平台核心模型。
 
 
 ## Docker 端到端验证

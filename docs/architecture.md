@@ -300,28 +300,24 @@ user-portal / admin-console
 
 `control-plane` 不直接负责拼接最终给某个具体 agent-core 的原始 prompt 文本。
 
-推荐边界如下：
+当前阶段不实现完整上下文包，只在每次 run 请求中携带最小身份链路：
+
+1. `workspaceId`
+2. `taskId`
+3. `sessionId`
+4. `runId`
+5. 用户本轮输入
+6. `source`
 
 ### 8.1 `control-plane`
 
-负责组装结构化上下文，例如：
-
-1. task 目标
-2. 用户输入
-3. 当前 task 目录
-4. repo 列表
-5. docs 内容
-6. `AGENTS.md`
-7. `CLAUDE.md`
-8. 平台约束和执行策略
-
-也就是输出一个结构化的 `TaskContext`。
+负责维护上面的执行身份链路，并把本轮输入传给 runtime adapter。
 
 ---
 
 ### 8.2 `runtime adapter`
 
-负责把 `TaskContext` 渲染为底层 runtime 所需的具体输入格式，例如：
+负责把本轮 run 请求渲染为底层 runtime 所需的具体输入格式，例如：
 
 1. system prompt
 2. messages
@@ -361,13 +357,13 @@ user-portal / admin-console
 
 前端读取采用三层合同：
 
-1. `POST /workspaces/{workspaceId}/sessions`：显式创建 session；可选 `firstTurn` 用于创建 session 后立即启动第一轮 run。
+1. `POST /workspaces/{workspaceId}/sessions`：创建默认 task + session；可选 `firstTurn` 用于创建 session 后立即启动第一轮 run。
 2. `POST /sessions/{sessionId}/turns`：在已有 session 中追加一轮用户输入并启动新的 run。
 3. `GET /sessions/{sessionId}/messages`：当前可展示消息快照。
 4. `GET /sessions/{sessionId}/events?after=<eventId>`：按 `session_events.id` 补洞 / replay。
 5. `GET /sessions/{sessionId}/stream`：live SSE，服务端写出 SSE `id:`，浏览器重连时用 `Last-Event-ID` 继续。
 
-执行态进入 `sessions + session_runs`：`sessionId` 与 `runId` 均由 control-plane 生成；同一个 session 第一版只允许一个 active run；`GET /sessions/{sessionId}/state` 返回 `messages + activeRun + latestEventId`；`POST /sessions/{sessionId}/interrupt` 表示 Stop current response，必须携带 `expectedRunId`，只有与 `sessions.active_run_id` 匹配时才转发到 agent-pod cancel，避免误中断后续 run。control-plane 不再提供 workspace 级 turn 入口，也不再通过 turn 请求隐式创建 session。
+执行态进入 `tasks + sessions + session_runs`：task 只是 session 的内部 execution scope，不包含 title/goal/metadata，也不单独暴露创建 API；`taskId`、`sessionId` 与 `runId` 均由 control-plane 生成；同一个 session 第一版只允许一个 active run；`GET /sessions/{sessionId}/state` 返回 `messages + activeRun + latestEventId`；`POST /sessions/{sessionId}/interrupt` 表示 Stop current response，必须携带 `expectedRunId`，只有与 `sessions.active_run_id` 匹配时才转发到 agent-pod cancel，避免误中断后续 run。control-plane 不再提供 workspace 级 turn 入口，也不再通过 turn 请求隐式创建 session。
 
 ---
 
@@ -463,8 +459,8 @@ user-portal / admin-console
 
 1. Pi Agent SDK/JSON-RPC 的正式接入方式
 2. run 超时、重试与更完整观测模型
-3. `TaskContext` 的字段结构
-4. task 与 repo 的持久化关系模型
+3. repo 插件扩展点与 task 目录准备时机
+4. task 目录结构与 workspace 复用策略
 5. workspace 的复用、回收和资源限制策略
 6. 多 runtime 协作模型
 

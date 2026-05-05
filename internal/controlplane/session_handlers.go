@@ -22,6 +22,7 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 		return
 	}
 	sessionID := newSessionID()
+	taskID := newTaskID()
 
 	var turn protocol.TurnRequest
 	var token string
@@ -36,16 +37,16 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 			http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
 			return
 		}
-		turn = turnRequestFromFirstTurn(workspaceID, sessionID, req.FirstTurn)
+		turn = turnRequestFromFirstTurn(workspaceID, taskID, sessionID, req.FirstTurn)
 	}
 
-	session, err := s.store.CreateSession(r.Context(), workspaceID, sessionID, req)
+	task, session, err := s.store.CreateSession(r.Context(), workspaceID, taskID, sessionID, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if req.FirstTurn == nil {
-		writeJSON(w, map[string]any{"session": session})
+		writeJSON(w, map[string]any{"task": task, "session": session})
 		return
 	}
 
@@ -60,7 +61,7 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"session": session, "run": run, "streamUrl": "/sessions/" + session.SessionID + "/stream"})
+	writeJSON(w, map[string]any{"task": task, "session": session, "run": run, "streamUrl": "/sessions/" + session.SessionID + "/stream"})
 }
 
 func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request) {
@@ -142,9 +143,10 @@ func (s *Server) workspaceExecutionToken(ctx context.Context, workspaceID string
 	return token, ok
 }
 
-func turnRequestFromFirstTurn(workspaceID, sessionID string, firstTurn *protocol.FirstTurnRequest) protocol.TurnRequest {
+func turnRequestFromFirstTurn(workspaceID, taskID, sessionID string, firstTurn *protocol.FirstTurnRequest) protocol.TurnRequest {
 	turn := protocol.TurnRequest{
 		WorkspaceID:      workspaceID,
+		TaskID:           taskID,
 		SessionID:        sessionID,
 		Message:          firstTurn.Message,
 		ActiveSkillSlugs: firstTurn.ActiveSkillSlugs,
@@ -157,6 +159,7 @@ func turnRequestFromFirstTurn(workspaceID, sessionID string, firstTurn *protocol
 func turnRequestFromCreateTurn(session SessionProjection, req protocol.CreateTurnRequest) protocol.TurnRequest {
 	turn := protocol.TurnRequest{
 		WorkspaceID:      session.WorkspaceID,
+		TaskID:           session.TaskID,
 		SessionID:        session.SessionID,
 		Message:          req.Message,
 		ActiveSkillSlugs: req.ActiveSkillSlugs,
@@ -177,6 +180,10 @@ func normalizeTurnRequest(turn *protocol.TurnRequest) {
 
 func newSessionID() string {
 	return "sess_" + time.Now().UTC().Format("20060102150405.000000000")
+}
+
+func newTaskID() string {
+	return "task_" + time.Now().UTC().Format("20060102150405.000000000")
 }
 
 func newRunID() string {
@@ -324,7 +331,7 @@ func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) 
 		}
 		if err != nil {
 			cancelError = err.Error()
-			event := protocol.NewEvent(protocol.EventError, protocol.TurnRequest{WorkspaceID: result.Run.WorkspaceID, SessionID: sessionID, RunID: req.ExpectedRunID})
+			event := protocol.NewEvent(protocol.EventError, protocol.TurnRequest{WorkspaceID: result.Run.WorkspaceID, TaskID: result.Run.TaskID, SessionID: sessionID, RunID: req.ExpectedRunID})
 			event.Error = &protocol.EventErrorPayload{Message: "cancel request failed: " + cancelError}
 			_, _ = s.appendAndPublish(context.Background(), event)
 		}

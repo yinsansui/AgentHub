@@ -17,6 +17,7 @@ type MemoryStore struct {
 	events      map[string][]StoredEvent
 	messages    map[string]map[string]MessageProjection
 	order       map[string][]string
+	tasks       map[string]TaskProjection
 	sessions    map[string]SessionProjection
 	activeRuns  map[string]string
 	runs        map[string]SessionRun
@@ -28,6 +29,7 @@ func NewMemoryStore() *MemoryStore {
 		events:     map[string][]StoredEvent{},
 		messages:   map[string]map[string]MessageProjection{},
 		order:      map[string][]string{},
+		tasks:      map[string]TaskProjection{},
 		sessions:   map[string]SessionProjection{},
 		activeRuns: map[string]string{},
 		runs:       map[string]SessionRun{},
@@ -50,20 +52,28 @@ func (s *MemoryStore) WorkspaceToken(ctx context.Context, workspaceID string) (s
 	return token, ok, nil
 }
 
-func (s *MemoryStore) CreateSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error) {
+func (s *MemoryStore) CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
+	task := s.tasks[taskID]
+	if task.TaskID == "" {
+		task = TaskProjection{TaskID: taskID, WorkspaceID: workspaceID, CreatedAt: now}
+	}
+	task.WorkspaceID = workspaceID
+	task.UpdatedAt = now
+	s.tasks[taskID] = task
 	session := s.sessions[sessionID]
 	if session.SessionID == "" {
-		session = SessionProjection{SessionID: sessionID, WorkspaceID: workspaceID, CreatedAt: now}
+		session = SessionProjection{SessionID: sessionID, TaskID: taskID, WorkspaceID: workspaceID, CreatedAt: now}
 	}
+	session.TaskID = taskID
 	session.WorkspaceID = workspaceID
 	session.Title = req.Title
 	session.Metadata = cloneMetadata(req.Metadata)
 	session.UpdatedAt = now
 	s.sessions[sessionID] = session
-	return session, nil
+	return task, session, nil
 }
 
 func (s *MemoryStore) GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
@@ -137,6 +147,9 @@ func (s *MemoryStore) StartRun(ctx context.Context, turn protocol.TurnRequest) (
 	if s.sessions[turn.SessionID].SessionID == "" {
 		return SessionRun{}, ErrSessionNotFound
 	}
+	if turn.TaskID == "" {
+		turn.TaskID = s.sessions[turn.SessionID].TaskID
+	}
 	if activeRunID := s.activeRuns[turn.SessionID]; activeRunID != "" {
 		active := s.runs[activeRunID]
 		if active.RunID != "" && !isTerminalRunStatus(active.Status) {
@@ -147,6 +160,7 @@ func (s *MemoryStore) StartRun(ctx context.Context, turn protocol.TurnRequest) (
 	now := time.Now().UTC()
 	run := SessionRun{
 		RunID:       turn.RunID,
+		TaskID:      turn.TaskID,
 		SessionID:   turn.SessionID,
 		WorkspaceID: turn.WorkspaceID,
 		Status:      RunStatusRunning,
