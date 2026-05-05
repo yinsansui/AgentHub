@@ -43,7 +43,7 @@ cd runtimes/ts-runtime-host && npm ci && npm run build
 make images
 ```
 
-For the real runtime golden path, provide an Anthropic-compatible endpoint and run the smoke script. The script starts PostgreSQL, control-plane, a local AgentPod, configures workspace skill / MCP / LLM definitions, creates a session, waits for the real LLM response, then verifies `/state`, `/messages`, and `/events?after=0`.
+For the real runtime golden path, provide an Anthropic-compatible endpoint and run the smoke script. The script starts PostgreSQL, control-plane, a local AgentPod, configures workspace skill / MCP / LLM definitions, creates a session, asks the real LLM to call a local stdio MCP tool, then verifies `/state`, `/messages`, and `/events?after=0`.
 
 ```bash
 export AGENTHUB_SMOKE_LLM_BASE_URL=http://example.local:8084

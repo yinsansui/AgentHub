@@ -400,7 +400,7 @@ Go AgentPodServer
 2. 本地开发、Docker 和 CI 都不得通过 `file:`、`npm link`、源码 copy 或本机绝对路径引用 `pi-mono`。
 3. `ts-runtime-host` stdout 只输出 AgentHub `UniversalEvent` JSONL；日志只能写 stderr。
 4. pi-coding-agent 创建 session 时显式加载当前 session cwd 下的 `.agents/skills`。
-5. `.agents/mcp.json` 本阶段只负责物理化，不保证被 pi-coding-agent 消费。
+5. `ts-runtime-host` 在创建 pi-coding-agent session 前读取当前 session cwd 下的 `.agents/mcp.json`，启动 stdio MCP server，并把 `server__tool` 命名空间后的 tool 注册为 `customTools`。
 
 LLM connection 配置由 control-plane 存储在 DB / 内存 store 中，不通过 shell 手工注入。运行 turn 前，control-plane 根据 `session.model_id` 和 workspace 级 connection 生成 runtime env；AgentPodServer 把 env 传给 `internal/runtime/process`，由 process adapter 在创建 `ts-runtime-host` 子进程时注入。
 
@@ -616,7 +616,7 @@ Skill 和 MCP 是两种不同扩展面：
 8. AgentPodServer 内部接口使用 per-pod bearer token。
 9. 事件流采用 `UniversalEvent`。
 10. 第一阶段先完成通用 MCP / skill 加载机制和通用 TS runtime-host，不先抽象完整 plugin 体系。
-11. 真实 runtime 主链路以 `scripts/smoke/real-runtime-golden-path.sh` 为验收入口，覆盖 PostgreSQL、LLM connection、skill / MCP 物理化、real LLM turn、event replay 与 message projection。
+11. 真实 runtime 主链路以 `scripts/smoke/real-runtime-golden-path.sh` 为验收入口，覆盖 PostgreSQL、LLM connection、skill / MCP 物理化、stdio MCP tool 调用、real LLM turn、event replay 与 message projection。
 
 ---
 
@@ -624,12 +624,11 @@ Skill 和 MCP 是两种不同扩展面：
 
 以下内容本轮先不展开，但后续需要继续细化：
 
-1. MCP 配置如何注册为真实 runtime tool
-2. run 超时、重试与更完整观测模型
-3. repo plugin：基于通用 MCP / skill 机制之后再实现，能力包括 repo catalog、UI 可选仓库列表、clone 状态记录、`repo.clone` MCP tool、repo knowledge skill、以及 clone 到 task `repos/` 目录
-4. task 目录结构与 workspace 复用策略
-5. workspace 的复用、回收和资源限制策略
-6. 多 runtime 协作模型
+1. run 超时、重试与更完整观测模型
+2. repo plugin：基于通用 MCP / skill 机制之后再实现，能力包括 repo catalog、UI 可选仓库列表、clone 状态记录、`repo.clone` MCP tool、repo knowledge skill、以及 clone 到 task `repos/` 目录
+3. task 目录结构与 workspace 复用策略
+4. workspace 的复用、回收和资源限制策略
+5. 多 runtime 协作模型
 
 ---
 

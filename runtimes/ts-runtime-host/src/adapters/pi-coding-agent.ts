@@ -10,6 +10,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
+import { MCPToolBridge } from "../mcp.js";
 import { baseEvent, type RunCommand, type UniversalBlock, type UniversalEvent } from "../protocol.js";
 
 export type RuntimeEventSink = (event: UniversalEvent) => void;
@@ -52,6 +53,7 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
   private session?: AgentSession;
   private sessionCwd?: string;
   private active?: ActiveRunState;
+  private mcpBridge?: MCPToolBridge;
 
   async run(command: RunCommand, emit: RuntimeEventSink): Promise<void> {
     if (this.active) {
@@ -78,6 +80,8 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
 
   async shutdown(): Promise<void> {
     this.session?.dispose();
+    await this.mcpBridge?.close();
+    this.mcpBridge = undefined;
   }
 
   private async ensureSession(cwd: string): Promise<AgentSession> {
@@ -88,6 +92,8 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
       this.session.dispose();
       this.session = undefined;
     }
+    await this.mcpBridge?.close();
+    this.mcpBridge = undefined;
 
     const agentDir = join(cwd, ".agenthub", "pi-agent");
     await mkdir(agentDir, { recursive: true });
@@ -112,6 +118,8 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
       additionalSkillPaths: [join(cwd, ".agents", "skills")],
     });
     await resourceLoader.reload();
+    const mcpBridge = new MCPToolBridge();
+    const mcpTools = await mcpBridge.loadTools(cwd);
 
     const { session } = await createAgentSession({
       cwd,
@@ -122,8 +130,10 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
       model: selectedModel,
       resourceLoader,
       sessionManager: SessionManager.inMemory(),
+      customTools: mcpTools,
     });
     session.subscribe((event) => this.handleEvent(event));
+    this.mcpBridge = mcpBridge;
     this.session = session;
     this.sessionCwd = cwd;
     return session;

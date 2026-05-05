@@ -97,9 +97,9 @@ curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
 
 ## 下一步
 
-1. 将 `.agents/mcp.json` 注册为真实 runtime tool。
-2. 为 run lifecycle 增加超时、重试与更完整的观测指标。
-3. 将 repo 绑定沉到插件扩展点，避免进入平台核心模型。
+1. 为 run lifecycle 增加超时、重试与更完整的观测指标。
+2. 将 repo 绑定沉到插件扩展点，避免进入平台核心模型。
+3. 扩展 MCP bridge 的 transport / 鉴权 / 观测能力。
 
 
 ## Docker 端到端验证

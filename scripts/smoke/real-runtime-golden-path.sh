@@ -13,6 +13,7 @@ AGENT_POD_PORT="${AGENTHUB_SMOKE_AGENT_POD_PORT:-3310}"
 POSTGRES_PORT="${AGENTHUB_SMOKE_POSTGRES_PORT:-55432}"
 TIMEOUT_SECONDS="${AGENTHUB_SMOKE_TIMEOUT_SECONDS:-180}"
 MARKER="${AGENTHUB_SMOKE_MARKER:-AGENTHUB_GOLDEN_PATH_OK}"
+MCP_MARKER="${AGENTHUB_SMOKE_MCP_MARKER:-AGENTHUB_MCP_TOOL_OK}"
 REFRESH_MODELS="${AGENTHUB_SMOKE_REFRESH_MODELS:-1}"
 SKIP_BUILD="${AGENTHUB_SMOKE_SKIP_BUILD:-0}"
 KEEP_ARTIFACTS="${AGENTHUB_SMOKE_KEEP_ARTIFACTS:-0}"
@@ -192,8 +193,17 @@ print(json.dumps({
 PY
 )"
 http_json PUT "${CONTROL_PLANE_URL}/workspaces/${WORKSPACE_ID}/skills/agenthub-golden-path" "${SKILL_PAYLOAD}" >/dev/null
-MCP_PAYLOAD='{"command":"node","args":["-e","process.exit(0)"],"transport":"stdio","env":{"AGENTHUB_SMOKE":"1"}}'
-http_json PUT "${CONTROL_PLANE_URL}/workspaces/${WORKSPACE_ID}/mcp-servers/golden-path-dummy" "${MCP_PAYLOAD}" >/dev/null
+MCP_PAYLOAD="$(MCP_SERVER_PATH="${ROOT_DIR}/scripts/smoke/mcp-golden-path-server.mjs" MCP_MARKER="${MCP_MARKER}" python3 - <<'PY'
+import json, os
+print(json.dumps({
+  "command": "node",
+  "args": [os.environ["MCP_SERVER_PATH"]],
+  "transport": "stdio",
+  "env": {"AGENTHUB_MCP_MARKER": os.environ["MCP_MARKER"]},
+}))
+PY
+)"
+http_json PUT "${CONTROL_PLANE_URL}/workspaces/${WORKSPACE_ID}/mcp-servers/golden-path" "${MCP_PAYLOAD}" >/dev/null
 
 log "configuring workspace LLM connection and model"
 CONNECTION_PAYLOAD="$(LLM_PROVIDER="${LLM_PROVIDER}" LLM_API_PROTOCOL="${LLM_API_PROTOCOL}" LLM_BASE_URL="${LLM_BASE_URL}" LLM_API_KEY="${LLM_API_KEY}" python3 - <<'PY'
@@ -222,13 +232,14 @@ PY
 http_json PUT "${CONTROL_PLANE_URL}/workspaces/${WORKSPACE_ID}/llm-models" "${MODEL_PAYLOAD}" >/dev/null
 
 log "creating session and first turn"
-SESSION_PAYLOAD="$(MODEL_ID="${MODEL_ID}" MARKER="${MARKER}" python3 - <<'PY'
+SESSION_PAYLOAD="$(MODEL_ID="${MODEL_ID}" MARKER="${MARKER}" MCP_MARKER="${MCP_MARKER}" python3 - <<'PY'
 import json, os
 marker=os.environ["MARKER"]
+mcp_marker=os.environ["MCP_MARKER"]
 model=os.environ["MODEL_ID"]
 print(json.dumps({
   "modelId": model,
-  "firstTurn": {"message": f"Use the agenthub-golden-path skill if available. Reply with exactly {marker} and no other words."}
+  "firstTurn": {"message": f"Use the agenthub-golden-path skill if available. Then call the MCP tool named golden_path__marker. Reply with exactly {marker} and {mcp_marker}, and no other words."}
 }))
 PY
 )"
@@ -248,7 +259,7 @@ MCP_FILE="${WORKSPACE_DIR}/tasks/${TASK_ID}/sessions/${SESSION_ID}/.agents/mcp.j
 python3 - <<PY
 import json, pathlib
 mcp=json.loads(pathlib.Path("${MCP_FILE}").read_text())
-assert "golden-path-dummy" in mcp.get("mcpServers", {}), mcp
+assert "golden-path" in mcp.get("mcpServers", {}), mcp
 PY
 
 log "polling session state until run completes"
@@ -276,9 +287,10 @@ done
 http_json GET "${CONTROL_PLANE_URL}/sessions/${SESSION_ID}/events?after=0" >"${EVENTS_FILE}"
 http_json GET "${CONTROL_PLANE_URL}/sessions/${SESSION_ID}/messages" >"${MESSAGES_FILE}"
 
-MARKER="${MARKER}" STATE_FILE="${STATE_FILE}" EVENTS_FILE="${EVENTS_FILE}" MESSAGES_FILE="${MESSAGES_FILE}" python3 - <<'PY'
+MARKER="${MARKER}" MCP_MARKER="${MCP_MARKER}" STATE_FILE="${STATE_FILE}" EVENTS_FILE="${EVENTS_FILE}" MESSAGES_FILE="${MESSAGES_FILE}" python3 - <<'PY'
 import json, os, pathlib
 marker = os.environ["MARKER"]
+mcp_marker = os.environ["MCP_MARKER"]
 state = json.loads(pathlib.Path(os.environ["STATE_FILE"]).read_text())
 events = json.loads(pathlib.Path(os.environ["EVENTS_FILE"]).read_text())
 messages = json.loads(pathlib.Path(os.environ["MESSAGES_FILE"]).read_text())
@@ -294,6 +306,8 @@ if not any(item.get("type") == "item.completed" for item in event_items):
 text = json.dumps(messages, ensure_ascii=False)
 if marker not in text:
     raise SystemExit(f"marker {marker!r} not found in messages projection")
+if mcp_marker not in text:
+    raise SystemExit(f"MCP marker {mcp_marker!r} not found in messages projection")
 PY
 
 log "PASS workspace=${WORKSPACE_ID} task=${TASK_ID} session=${SESSION_ID} run=${RUN_ID_CREATED} latestEventId=$(json_get 'data.get("latestEventId", "")' <"${STATE_FILE}")"
