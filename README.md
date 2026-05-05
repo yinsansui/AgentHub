@@ -54,6 +54,12 @@ make smoke-real-runtime
 
 Secrets are only sent through the control-plane API and runtime subprocess environment. The smoke script writes transient logs under `.agenthub/smoke/` and removes them after a successful run; set `AGENTHUB_SMOKE_KEEP_ARTIFACTS=1` to keep them for debugging.
 
+Run lifecycle cancel semantics can be verified without a real LLM:
+
+```bash
+make smoke-cancel-lifecycle
+```
+
 For durable local runs, point the control-plane at PostgreSQL:
 
 ```bash

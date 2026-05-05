@@ -57,6 +57,19 @@ make smoke-real-runtime
 | `AGENTHUB_SMOKE_SKIP_BUILD` | `0` | 设为 `1` 时跳过 `ts-runtime-host` build |
 | `AGENTHUB_RUN_TIMEOUT` | `30m` | control-plane 全局 run timeout |
 
+## Cancel Lifecycle Smoke
+
+取消语义用 `scripts/smoke/cancel-lifecycle.sh` 验收。它使用本地 fake runtime 挂起 run，覆盖：
+
+1. 错误 `expectedRunId` 返回 conflict，且不改变当前 active run。
+2. 正确 `expectedRunId` 写入 `run.cancelling` 并转发 AgentPod cancel。
+3. repeated cancel 不重复写 `run.cancelling`。
+4. runtime abort 后写入 `run.cancelled`，`GET /state` 的 `activeRun` 清空。
+
+```bash
+make smoke-cancel-lifecycle
+```
+
 如果 control-plane 运行在宿主机而不是 Docker network 内，默认的 `http://agent-pod-{workspaceId}:3001` 不能被宿主机 DNS 解析。此时可以先用本地 agent-pod 进程验证 SSE 链路：
 
 ```bash

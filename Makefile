@@ -1,4 +1,4 @@
-.PHONY: fmt check build-control-plane build-agent-pod build-ts-runtime-host build-linux-bins image-agent-pod image-control-plane images smoke-real-runtime
+.PHONY: fmt check build-control-plane build-agent-pod build-ts-runtime-host build-linux-bins image-agent-pod image-control-plane images smoke-real-runtime smoke-cancel-lifecycle
 
 fmt:
 	gofmt -w cmd internal pkg
@@ -31,3 +31,6 @@ images: image-agent-pod image-control-plane
 
 smoke-real-runtime:
 	./scripts/smoke/real-runtime-golden-path.sh
+
+smoke-cancel-lifecycle:
+	./scripts/smoke/cancel-lifecycle.sh

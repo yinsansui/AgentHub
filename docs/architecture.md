@@ -535,7 +535,7 @@ Skill 和 MCP 是两种不同扩展面：
 
 事件事实进入 PostgreSQL append-only `session_events` event log；`session_events.id` 使用数据库全局递增序列作为跨 session 的 replay cursor。`messages` 保存消息级 projection 元数据，`message_blocks` 保存最终可展示内容块。`text.delta` / `thinking.delta` / `tool_call.delta` 只表示实时块级增量，不直接落成 block；`message.completed` 必须携带完整 `content`，projection 以该完整内容重建对应 message blocks。
 
-前端读取采用三层合同：
+前端读取采用三层合同（详细事件序列见 `docs/development/runtime-event-contract.md`）：
 
 1. `POST /workspaces/{workspaceId}/sessions`：创建默认 task + session；可选 `firstTurn` 用于创建 session 后立即启动第一轮 run。
 2. `POST /sessions/{sessionId}/turns`：在已有 session 中追加一轮用户输入并启动新的 run。
