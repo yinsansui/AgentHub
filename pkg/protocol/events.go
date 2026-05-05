@@ -20,6 +20,29 @@ type TurnRequest struct {
 	Source           string   `json:"source"`
 }
 
+type CreateSessionRequest struct {
+	Title     string            `json:"title,omitempty"`
+	Metadata  map[string]any    `json:"metadata,omitempty"`
+	FirstTurn *FirstTurnRequest `json:"firstTurn,omitempty"`
+}
+
+type FirstTurnRequest struct {
+	Message          string   `json:"message"`
+	ActiveSkillSlugs []string `json:"activeSkillSlugs,omitempty"`
+	Source           string   `json:"source,omitempty"`
+}
+
+type CreateTurnRequest struct {
+	Message          string   `json:"message"`
+	ActiveSkillSlugs []string `json:"activeSkillSlugs,omitempty"`
+	Source           string   `json:"source,omitempty"`
+}
+
+type InterruptRequest struct {
+	ExpectedRunID string `json:"expectedRunId"`
+	Reason        string `json:"reason,omitempty"`
+}
+
 type UniversalEvent struct {
 	Type        string             `json:"type"`
 	Timestamp   string             `json:"timestamp"`

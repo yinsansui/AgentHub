@@ -17,6 +17,13 @@ const (
 	MessageStatusCompleted = "completed"
 	MessageStatusError     = "error"
 
+	RunStatusQueued     = "queued"
+	RunStatusRunning    = "running"
+	RunStatusCancelling = "cancelling"
+	RunStatusCompleted  = "completed"
+	RunStatusFailed     = "failed"
+	RunStatusCancelled  = "cancelled"
+
 	DefaultEventReplayLimit = 500
 	MaxEventReplayLimit     = 1000
 )
@@ -25,9 +32,16 @@ type EventStore interface {
 	Ping(ctx context.Context) error
 	SaveWorkspaceToken(ctx context.Context, workspaceID string, token string) error
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
+	CreateSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error)
+	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
 	Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error)
 	ListEventsBySession(ctx context.Context, sessionID string, afterID int64, limit int) ([]StoredEvent, error)
 	ListMessagesBySession(ctx context.Context, sessionID string) ([]MessageProjection, error)
+	StartRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error)
+	FinishRun(ctx context.Context, sessionID, runID, status string, eventError *protocol.EventErrorPayload) (SessionRun, error)
+	GetRun(ctx context.Context, sessionID, runID string) (SessionRun, bool, error)
+	RequestRunInterrupt(ctx context.Context, sessionID, expectedRunID, reason string) (RunInterruptResult, error)
+	SessionState(ctx context.Context, sessionID string) (SessionState, error)
 }
 
 type StoredEvent struct {
@@ -48,6 +62,54 @@ type MessageProjection struct {
 	Error       *protocol.EventErrorPayload `json:"error,omitempty"`
 	CreatedAt   time.Time                   `json:"createdAt"`
 	UpdatedAt   time.Time                   `json:"updatedAt"`
+}
+
+type SessionProjection struct {
+	SessionID   string         `json:"sessionId"`
+	WorkspaceID string         `json:"workspaceId"`
+	Title       string         `json:"title,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+}
+
+type SessionRun struct {
+	RunID             string                      `json:"runId"`
+	SessionID         string                      `json:"sessionId"`
+	WorkspaceID       string                      `json:"workspaceId"`
+	Status            string                      `json:"status"`
+	StartedAt         time.Time                   `json:"startedAt"`
+	EndedAt           *time.Time                  `json:"endedAt,omitempty"`
+	LastEventID       int64                       `json:"lastEventId"`
+	Error             *protocol.EventErrorPayload `json:"error,omitempty"`
+	CancelRequestedAt *time.Time                  `json:"cancelRequestedAt,omitempty"`
+	CreatedAt         time.Time                   `json:"createdAt"`
+	UpdatedAt         time.Time                   `json:"updatedAt"`
+}
+
+type SessionState struct {
+	SessionID     string              `json:"sessionId"`
+	Messages      []MessageProjection `json:"messages"`
+	ActiveRun     *SessionRun         `json:"activeRun,omitempty"`
+	LatestEventID int64               `json:"latestEventId"`
+}
+
+type RunInterruptResult struct {
+	Interrupted   bool        `json:"interrupted"`
+	Reason        string      `json:"reason,omitempty"`
+	ExpectedRunID string      `json:"expectedRunId"`
+	ActiveRun     *SessionRun `json:"activeRun,omitempty"`
+	Run           *SessionRun `json:"run,omitempty"`
+}
+
+type ActiveRunConflict struct {
+	ActiveRun SessionRun
+}
+
+var ErrSessionNotFound = errors.New("session not found")
+
+func (e *ActiveRunConflict) Error() string {
+	return "session already has an active run"
 }
 
 type Store struct {
@@ -93,6 +155,39 @@ CREATE TABLE IF NOT EXISTS session_events (
 CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events (session_id, id);
 CREATE INDEX IF NOT EXISTS idx_session_events_workspace_id_id ON session_events (workspace_id, id);
 CREATE INDEX IF NOT EXISTS idx_session_events_workspace_session_id ON session_events (workspace_id, session_id, id);
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  title TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  active_run_id TEXT,
+  active_run_version BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS session_runs (
+  run_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  last_event_id BIGINT,
+  error_code TEXT,
+  error_message TEXT,
+  cancel_requested_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS active_run_id TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS active_run_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_sessions_active_run_id ON sessions (active_run_id);
+CREATE INDEX IF NOT EXISTS idx_session_runs_session_status ON session_runs (session_id, status, started_at);
+CREATE INDEX IF NOT EXISTS idx_session_runs_workspace_session ON session_runs (workspace_id, session_id, started_at);
 CREATE TABLE IF NOT EXISTS messages (
   session_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -160,6 +255,14 @@ func (s *Store) WorkspaceToken(ctx context.Context, workspaceID string) (string,
 	return token, true, nil
 }
 
+func (s *Store) CreateSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error) {
+	return s.createSession(ctx, workspaceID, sessionID, req)
+}
+
+func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
+	return s.getSession(ctx, sessionID)
+}
+
 func (s *Store) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {
 	return s.append(ctx, event)
 }
@@ -170,4 +273,24 @@ func (s *Store) ListEventsBySession(ctx context.Context, sessionID string, after
 
 func (s *Store) ListMessagesBySession(ctx context.Context, sessionID string) ([]MessageProjection, error) {
 	return s.listMessagesBySession(ctx, sessionID)
+}
+
+func (s *Store) StartRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error) {
+	return s.startRun(ctx, turn)
+}
+
+func (s *Store) FinishRun(ctx context.Context, sessionID, runID, status string, eventError *protocol.EventErrorPayload) (SessionRun, error) {
+	return s.finishRun(ctx, sessionID, runID, status, eventError)
+}
+
+func (s *Store) GetRun(ctx context.Context, sessionID, runID string) (SessionRun, bool, error) {
+	return s.getRun(ctx, sessionID, runID)
+}
+
+func (s *Store) RequestRunInterrupt(ctx context.Context, sessionID, expectedRunID, reason string) (RunInterruptResult, error) {
+	return s.requestRunInterrupt(ctx, sessionID, expectedRunID, reason)
+}
+
+func (s *Store) SessionState(ctx context.Context, sessionID string) (SessionState, error) {
+	return s.sessionState(ctx, sessionID)
 }

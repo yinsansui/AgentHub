@@ -11,7 +11,7 @@
 7. `internal/runtime/pi`：Pi Agent CLI/JSONL 适配边界；未配置 `PI_AGENT_COMMAND` 时使用 stub 输出。
 8. `pkg/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
 9. `pkg/sse`：SSE 读写工具。
-10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
+10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection + `sessions` / `session_runs` run lifecycle；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
 
 ## 本地验证
 
@@ -33,9 +33,9 @@ AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE=http://127.0.0.1:3001 \
 AGENTHUB_DEV_AGENT_POD_TOKEN=dev-token \
 go run ./cmd/control-plane
 
-curl -N -X POST http://127.0.0.1:3000/workspaces/ws_dev/turn \
+curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
   -H 'content-type: application/json' \
-  -d '{"sessionId":"sess_dev","runId":"run_dev","message":"hello"}'
+  -d '{"firstTurn":{"message":"hello"}}'
 ```
 
 真正使用 Docker container 时，control-plane 应与 agent-pod 在同一个 Docker network 中。当前 Dockerfile 使用本机交叉编译出的静态 Go binary + `scratch` 镜像，避免首轮开发依赖 Docker Hub base image 拉取。
@@ -43,7 +43,7 @@ curl -N -X POST http://127.0.0.1:3000/workspaces/ws_dev/turn \
 ## 下一步
 
 1. 将 `PiCLIAdapter` 从 CLI JSONL 接入升级为 Pi Agent SDK/JSON-RPC 接入。
-2. 将当前 control-plane session stream 扩展为可观测的 run 状态与取消控制。
+2. 为 run lifecycle 增加超时、重试与更完整的观测指标。
 3. 继续扩展 task、repo 与 runtime 表。
 
 
@@ -66,16 +66,31 @@ docker run -d --name agenthub-control-plane --network agenthub \
   agenthub-control-plane:dev
 
 curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/start -d '{}'
-curl -N -X POST http://127.0.0.1:3000/workspaces/ws_dev/turn   -H 'content-type: application/json'   -d '{"sessionId":"sess_dev","runId":"run_dev","message":"hello"}'
+SESSION_ID=$(curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
+  -H 'content-type: application/json' \
+  -d '{"firstTurn":{"message":"hello"}}' | jq -r '.session.sessionId')
+
+# 在已有 session 中追加一轮 turn
+curl -sS -X POST "http://127.0.0.1:3000/sessions/${SESSION_ID}/turns" \
+  -H 'content-type: application/json' \
+  -d '{"message":"continue"}'
 
 # 查询当前消息快照
-curl http://127.0.0.1:3000/sessions/sess_dev/messages
+curl "http://127.0.0.1:3000/sessions/${SESSION_ID}/messages"
 
 # 用全局 event id 补洞 / replay
-curl 'http://127.0.0.1:3000/sessions/sess_dev/events?after=0'
+curl "http://127.0.0.1:3000/sessions/${SESSION_ID}/events?after=0"
 
 # live reconnect：浏览器 EventSource 会自动带 Last-Event-ID
-curl -N http://127.0.0.1:3000/sessions/sess_dev/stream
+curl -N "http://127.0.0.1:3000/sessions/${SESSION_ID}/stream"
+
+# 查询消息快照 + active run + 最新 event cursor
+curl "http://127.0.0.1:3000/sessions/${SESSION_ID}/state"
+
+# 中断当前响应；expectedRunId 必须等于 state.activeRun.runId
+curl -X POST "http://127.0.0.1:3000/sessions/${SESSION_ID}/interrupt" \
+  -H 'content-type: application/json' \
+  -d '{"expectedRunId":"<state.activeRun.runId>","reason":"user_stop"}'
 ```
 
 清理：

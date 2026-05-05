@@ -361,9 +361,13 @@ user-portal / admin-console
 
 前端读取采用三层合同：
 
-1. `GET /sessions/{sessionId}/messages`：当前可展示消息快照。
-2. `GET /sessions/{sessionId}/events?after=<eventId>`：按 `session_events.id` 补洞 / replay。
-3. `GET /sessions/{sessionId}/stream`：live SSE，服务端写出 SSE `id:`，浏览器重连时用 `Last-Event-ID` 继续。
+1. `POST /workspaces/{workspaceId}/sessions`：显式创建 session；可选 `firstTurn` 用于创建 session 后立即启动第一轮 run。
+2. `POST /sessions/{sessionId}/turns`：在已有 session 中追加一轮用户输入并启动新的 run。
+3. `GET /sessions/{sessionId}/messages`：当前可展示消息快照。
+4. `GET /sessions/{sessionId}/events?after=<eventId>`：按 `session_events.id` 补洞 / replay。
+5. `GET /sessions/{sessionId}/stream`：live SSE，服务端写出 SSE `id:`，浏览器重连时用 `Last-Event-ID` 继续。
+
+执行态进入 `sessions + session_runs`：`sessionId` 与 `runId` 均由 control-plane 生成；同一个 session 第一版只允许一个 active run；`GET /sessions/{sessionId}/state` 返回 `messages + activeRun + latestEventId`；`POST /sessions/{sessionId}/interrupt` 表示 Stop current response，必须携带 `expectedRunId`，只有与 `sessions.active_run_id` 匹配时才转发到 agent-pod cancel，避免误中断后续 run。control-plane 不再提供 workspace 级 turn 入口，也不再通过 turn 请求隐式创建 session。
 
 ---
 
@@ -458,7 +462,7 @@ user-portal / admin-console
 以下内容本轮先不展开，但后续需要继续细化：
 
 1. Pi Agent SDK/JSON-RPC 的正式接入方式
-2. run 状态、取消、超时与观测模型
+2. run 超时、重试与更完整观测模型
 3. `TaskContext` 的字段结构
 4. task 与 repo 的持久化关系模型
 5. workspace 的复用、回收和资源限制策略

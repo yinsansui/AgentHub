@@ -22,11 +22,16 @@ type Server struct {
 	adapter     runtime.Runtime
 
 	mu    sync.Mutex
-	turns map[string]context.CancelFunc
+	turns map[string]trackedTurn
+}
+
+type trackedTurn struct {
+	runID  string
+	cancel context.CancelFunc
 }
 
 func NewServer(workspaceID, runtimeID, token string, adapter runtime.Runtime) *Server {
-	return &Server{workspaceID: workspaceID, runtimeID: runtimeID, token: token, adapter: adapter, turns: map[string]context.CancelFunc{}}
+	return &Server{workspaceID: workspaceID, runtimeID: runtimeID, token: token, adapter: adapter, turns: map[string]trackedTurn{}}
 }
 
 func NewServerFromEnv() *Server {
@@ -74,8 +79,8 @@ func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
-	s.track(req.SessionID, cancel)
-	defer s.untrack(req.SessionID)
+	s.track(req.SessionID, req.RunID, cancel)
+	defer s.untrack(req.SessionID, req.RunID)
 	sse.SetHeaders(w)
 	err := s.adapter.RunTurn(ctx, req, func(event protocol.UniversalEvent) error {
 		return sse.WriteEvent(w, event)
@@ -91,15 +96,26 @@ func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
-	s.mu.Lock()
-	cancel := s.turns[sessionID]
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-		_ = json.NewEncoder(w).Encode(map[string]any{"cancelled": true, "sessionId": sessionID})
+	var req protocol.InterruptRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.ExpectedRunID == "" {
+		http.Error(w, "expectedRunId is required", http.StatusBadRequest)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"cancelled": false, "sessionId": sessionID, "reason": "not_running"})
+	s.mu.Lock()
+	turn, ok := s.turns[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		_ = json.NewEncoder(w).Encode(map[string]any{"cancelled": false, "sessionId": sessionID, "expectedRunId": req.ExpectedRunID, "reason": "not_running"})
+		return
+	}
+	if turn.runID != req.ExpectedRunID {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"cancelled": false, "sessionId": sessionID, "expectedRunId": req.ExpectedRunID, "activeRunId": turn.runID, "reason": "run_mismatch"})
+		return
+	}
+	turn.cancel()
+	_ = json.NewEncoder(w).Encode(map[string]any{"cancelled": true, "sessionId": sessionID, "runId": req.ExpectedRunID})
 }
 
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
@@ -125,15 +141,18 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) track(sessionID string, cancel context.CancelFunc) {
+func (s *Server) track(sessionID, runID string, cancel context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.turns[sessionID] = cancel
+	s.turns[sessionID] = trackedTurn{runID: runID, cancel: cancel}
 }
 
-func (s *Server) untrack(sessionID string) {
+func (s *Server) untrack(sessionID, runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if turn, ok := s.turns[sessionID]; ok && turn.runID != runID {
+		return
+	}
 	delete(s.turns, sessionID)
 }
 

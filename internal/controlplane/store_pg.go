@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -34,6 +35,15 @@ RETURNING id, event_type, created_at
 	}
 	if err := projectMessage(ctx, tx, event); err != nil {
 		return StoredEvent{}, err
+	}
+	if event.RunID != "" {
+		if _, err := tx.Exec(ctx, `
+UPDATE session_runs
+SET last_event_id = $1, updated_at = now()
+WHERE session_id = $2 AND run_id = $3
+`, stored.ID, event.SessionID, event.RunID); err != nil {
+			return StoredEvent{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return StoredEvent{}, err
@@ -140,6 +150,227 @@ ORDER BY m.created_at ASC, m.message_id ASC, b.block_index ASC
 		}
 	}
 	return messages, rows.Err()
+}
+
+func (s *Store) createSession(ctx context.Context, workspaceID, sessionID string, req protocol.CreateSessionRequest) (SessionProjection, error) {
+	if req.Metadata == nil {
+		req.Metadata = map[string]any{}
+	}
+	payload, err := json.Marshal(req.Metadata)
+	if err != nil {
+		return SessionProjection{}, err
+	}
+	var session SessionProjection
+	var metadata []byte
+	err = s.pool.QueryRow(ctx, `
+INSERT INTO sessions (id, workspace_id, title, metadata, updated_at)
+VALUES ($1, $2, $3, $4::jsonb, now())
+ON CONFLICT (id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  title = EXCLUDED.title,
+  metadata = EXCLUDED.metadata,
+  updated_at = now()
+RETURNING id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
+`, sessionID, workspaceID, nullIfEmpty(req.Title), payload).Scan(&session.SessionID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
+	if err != nil {
+		return SessionProjection{}, err
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &session.Metadata)
+	}
+	return session, nil
+}
+
+func (s *Store) getSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
+	var session SessionProjection
+	var metadata []byte
+	err := s.pool.QueryRow(ctx, `
+SELECT id, workspace_id, COALESCE(title, ''), metadata, created_at, updated_at
+FROM sessions
+WHERE id = $1
+`, sessionID).Scan(&session.SessionID, &session.WorkspaceID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SessionProjection{}, false, nil
+	}
+	if err != nil {
+		return SessionProjection{}, false, err
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &session.Metadata)
+	}
+	return session, true, nil
+}
+
+func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SessionRun{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var activeRunID sql.NullString
+	if err := tx.QueryRow(ctx, `SELECT active_run_id FROM sessions WHERE id = $1 FOR UPDATE`, turn.SessionID).Scan(&activeRunID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SessionRun{}, ErrSessionNotFound
+		}
+		return SessionRun{}, err
+	}
+	if activeRunID.Valid && activeRunID.String != "" {
+		active, ok, err := queryRun(ctx, tx, turn.SessionID, activeRunID.String)
+		if err != nil {
+			return SessionRun{}, err
+		}
+		if ok && !isTerminalRunStatus(active.Status) {
+			return SessionRun{}, &ActiveRunConflict{ActiveRun: active}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE sessions SET active_run_id = NULL, updated_at = now() WHERE id = $1`, turn.SessionID); err != nil {
+			return SessionRun{}, err
+		}
+	}
+
+	run, err := scanRun(tx.QueryRow(ctx, `
+INSERT INTO session_runs (run_id, session_id, workspace_id, status, started_at, updated_at)
+VALUES ($1, $2, $3, $4, now(), now())
+RETURNING run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+`, turn.RunID, turn.SessionID, turn.WorkspaceID, RunStatusRunning))
+	if err != nil {
+		return SessionRun{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE sessions
+SET active_run_id = $2, active_run_version = active_run_version + 1, updated_at = now()
+WHERE id = $1
+`, turn.SessionID, turn.RunID); err != nil {
+		return SessionRun{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return SessionRun{}, err
+	}
+	return run, nil
+}
+
+func (s *Store) finishRun(ctx context.Context, sessionID, runID, status string, eventError *protocol.EventErrorPayload) (SessionRun, error) {
+	var errorCode any
+	var errorMessage any
+	if eventError != nil {
+		errorCode = nullIfEmpty(eventError.Code)
+		errorMessage = eventError.Message
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SessionRun{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	run, err := scanRun(tx.QueryRow(ctx, `
+UPDATE session_runs
+SET status = $3,
+    ended_at = COALESCE(ended_at, now()),
+    error_code = $4,
+    error_message = $5,
+    updated_at = now()
+WHERE session_id = $1 AND run_id = $2
+RETURNING run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+`, sessionID, runID, status, errorCode, errorMessage))
+	if err != nil {
+		return SessionRun{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE sessions
+SET active_run_id = NULL,
+    active_run_version = active_run_version + 1,
+    updated_at = now()
+WHERE id = $1 AND active_run_id = $2
+`, sessionID, runID); err != nil {
+		return SessionRun{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return SessionRun{}, err
+	}
+	return run, nil
+}
+
+func (s *Store) getRun(ctx context.Context, sessionID, runID string) (SessionRun, bool, error) {
+	return queryRun(ctx, s.pool, sessionID, runID)
+}
+
+func (s *Store) requestRunInterrupt(ctx context.Context, sessionID, expectedRunID, reason string) (RunInterruptResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return RunInterruptResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var activeRunID sql.NullString
+	err = tx.QueryRow(ctx, `SELECT active_run_id FROM sessions WHERE id = $1 FOR UPDATE`, sessionID).Scan(&activeRunID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunInterruptResult{Interrupted: false, Reason: "no_active_run", ExpectedRunID: expectedRunID}, nil
+	}
+	if err != nil {
+		return RunInterruptResult{}, err
+	}
+	if !activeRunID.Valid || activeRunID.String == "" {
+		return RunInterruptResult{Interrupted: false, Reason: "no_active_run", ExpectedRunID: expectedRunID}, nil
+	}
+
+	active, ok, err := queryRun(ctx, tx, sessionID, activeRunID.String)
+	if err != nil {
+		return RunInterruptResult{}, err
+	}
+	if !ok {
+		return RunInterruptResult{Interrupted: false, Reason: "no_active_run", ExpectedRunID: expectedRunID}, nil
+	}
+	if active.RunID != expectedRunID {
+		return RunInterruptResult{Interrupted: false, Reason: "run_mismatch", ExpectedRunID: expectedRunID, ActiveRun: &active}, nil
+	}
+	if isTerminalRunStatus(active.Status) {
+		return RunInterruptResult{Interrupted: false, Reason: "already_terminal", ExpectedRunID: expectedRunID, Run: &active}, nil
+	}
+	if active.Status == RunStatusCancelling {
+		return RunInterruptResult{Interrupted: true, ExpectedRunID: expectedRunID, Run: &active}, nil
+	}
+
+	run, err := scanRun(tx.QueryRow(ctx, `
+UPDATE session_runs
+SET status = $3,
+    cancel_requested_at = now(),
+    updated_at = now()
+WHERE session_id = $1 AND run_id = $2
+RETURNING run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+`, sessionID, expectedRunID, RunStatusCancelling))
+	if err != nil {
+		return RunInterruptResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RunInterruptResult{}, err
+	}
+	return RunInterruptResult{Interrupted: true, ExpectedRunID: expectedRunID, Run: &run}, nil
+}
+
+func (s *Store) sessionState(ctx context.Context, sessionID string) (SessionState, error) {
+	messages, err := s.listMessagesBySession(ctx, sessionID)
+	if err != nil {
+		return SessionState{}, err
+	}
+	state := SessionState{SessionID: sessionID, Messages: messages}
+	var activeRunID sql.NullString
+	err = s.pool.QueryRow(ctx, `SELECT active_run_id FROM sessions WHERE id = $1`, sessionID).Scan(&activeRunID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return SessionState{}, err
+	}
+	if activeRunID.Valid && activeRunID.String != "" {
+		run, ok, err := s.getRun(ctx, sessionID, activeRunID.String)
+		if err != nil {
+			return SessionState{}, err
+		}
+		if ok && !isTerminalRunStatus(run.Status) {
+			state.ActiveRun = &run
+		}
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(max(id), 0) FROM session_events WHERE session_id = $1`, sessionID).Scan(&state.LatestEventID); err != nil {
+		return SessionState{}, err
+	}
+	return state, nil
 }
 
 type sqlProjector interface {
@@ -308,4 +539,62 @@ func errorMessageID(event protocol.UniversalEvent) string {
 		return "err_" + strings.NewReplacer(":", "", ".", "", "-", "").Replace(event.Timestamp)
 	}
 	return "err_" + time.Now().UTC().Format("20060102150405.000000000")
+}
+
+type runQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func queryRun(ctx context.Context, q runQuerier, sessionID, runID string) (SessionRun, bool, error) {
+	run, err := scanRun(q.QueryRow(ctx, `
+SELECT run_id, session_id, workspace_id, status, started_at, ended_at, COALESCE(last_event_id, 0), error_code, error_message, cancel_requested_at, created_at, updated_at
+FROM session_runs
+WHERE session_id = $1 AND run_id = $2
+`, sessionID, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SessionRun{}, false, nil
+	}
+	if err != nil {
+		return SessionRun{}, false, err
+	}
+	return run, true, nil
+}
+
+func scanRun(row pgx.Row) (SessionRun, error) {
+	var run SessionRun
+	var endedAt sql.NullTime
+	var errorCode sql.NullString
+	var errorMessage sql.NullString
+	var cancelRequestedAt sql.NullTime
+	err := row.Scan(
+		&run.RunID,
+		&run.SessionID,
+		&run.WorkspaceID,
+		&run.Status,
+		&run.StartedAt,
+		&endedAt,
+		&run.LastEventID,
+		&errorCode,
+		&errorMessage,
+		&cancelRequestedAt,
+		&run.CreatedAt,
+		&run.UpdatedAt,
+	)
+	if err != nil {
+		return SessionRun{}, err
+	}
+	if endedAt.Valid {
+		run.EndedAt = &endedAt.Time
+	}
+	if errorCode.Valid || errorMessage.Valid {
+		run.Error = &protocol.EventErrorPayload{Code: errorCode.String, Message: errorMessage.String}
+	}
+	if cancelRequestedAt.Valid {
+		run.CancelRequestedAt = &cancelRequestedAt.Time
+	}
+	return run, nil
+}
+
+func isTerminalRunStatus(status string) bool {
+	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled
 }

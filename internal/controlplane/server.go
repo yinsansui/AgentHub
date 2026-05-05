@@ -54,10 +54,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /workspaces/{workspaceId}/stop", s.handleStopWorkspace)
 	mux.HandleFunc("GET /workspaces/{workspaceId}/pod", s.handleInspectWorkspace)
 	mux.HandleFunc("GET /workspaces/{workspaceId}/logs", s.handleWorkspaceLogs)
-	mux.HandleFunc("POST /workspaces/{workspaceId}/turn", s.handleTurn)
+	mux.HandleFunc("POST /workspaces/{workspaceId}/sessions", s.handleCreateWorkspaceSession)
+	mux.HandleFunc("POST /sessions/{sessionId}/turns", s.handleCreateSessionTurn)
 	mux.HandleFunc("GET /sessions/{sessionId}/events", s.handleSessionEvents)
 	mux.HandleFunc("GET /sessions/{sessionId}/stream", s.handleSessionStream)
 	mux.HandleFunc("GET /sessions/{sessionId}/messages", s.handleSessionMessages)
+	mux.HandleFunc("GET /sessions/{sessionId}/state", s.handleSessionState)
+	mux.HandleFunc("POST /sessions/{sessionId}/interrupt", s.handleSessionInterrupt)
 	return mux
 }
 

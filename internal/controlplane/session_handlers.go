@@ -3,55 +3,123 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"agenthub/pkg/protocol"
 	"agenthub/pkg/sse"
 )
 
-func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Request) {
 	workspaceID := r.PathValue("workspaceId")
-	var turn protocol.TurnRequest
-	if err := json.NewDecoder(r.Body).Decode(&turn); err != nil {
+	var req protocol.CreateSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	turn.WorkspaceID = workspaceID
-	if turn.SessionID == "" {
-		turn.SessionID = "sess_" + time.Now().UTC().Format("20060102150405.000000000")
+	sessionID := newSessionID()
+
+	var turn protocol.TurnRequest
+	var token string
+	if req.FirstTurn != nil {
+		if strings.TrimSpace(req.FirstTurn.Message) == "" {
+			http.Error(w, "firstTurn.message is required", http.StatusBadRequest)
+			return
+		}
+		var ok bool
+		token, ok = s.workspaceExecutionToken(r.Context(), workspaceID)
+		if !ok {
+			http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
+			return
+		}
+		turn = turnRequestFromFirstTurn(workspaceID, sessionID, req.FirstTurn)
 	}
-	if turn.RunID == "" {
-		turn.RunID = "run_" + time.Now().UTC().Format("20060102150405.000000000")
+
+	session, err := s.store.CreateSession(r.Context(), workspaceID, sessionID, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	if turn.Source == "" {
-		turn.Source = "api"
+	if req.FirstTurn == nil {
+		writeJSON(w, map[string]any{"session": session})
+		return
 	}
-	if turn.Message == "" {
+
+	run, err := s.startTurnForSession(r.Context(), workspaceID, token, turn)
+	if err != nil {
+		var conflict *ActiveRunConflict
+		if errors.As(err, &conflict) {
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": conflict.ActiveRun})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"session": session, "run": run, "streamUrl": "/sessions/" + session.SessionID + "/stream"})
+}
+
+func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionId")
+	var req protocol.CreateTurnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
 		http.Error(w, "message is required", http.StatusBadRequest)
 		return
 	}
-	token, ok := s.workspaceToken(r.Context(), workspaceID)
-	if !ok && s.config.DevAgentPodToken != "" {
-		token = s.config.DevAgentPodToken
-		ok = true
+
+	session, ok, err := s.store.GetSession(r.Context(), sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	token, ok := s.workspaceExecutionToken(r.Context(), session.WorkspaceID)
 	if !ok {
 		http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
 		return
 	}
-	events, unsubscribe := s.hub.Subscribe(turn.SessionID)
-	defer unsubscribe()
 
-	if _, err := s.appendAndPublish(r.Context(), userMessageEvent(turn)); err != nil {
+	run, err := s.startTurnForSession(r.Context(), session.WorkspaceID, token, turnRequestFromCreateTurn(session, req))
+	if err != nil {
+		var conflict *ActiveRunConflict
+		if errors.As(err, &conflict) {
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": conflict.ActiveRun})
+			return
+		}
+		if errors.Is(err, ErrSessionNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sse.SetHeaders(w)
-	runDone := make(chan struct{})
+	writeJSON(w, map[string]any{"session": session, "run": run, "streamUrl": "/sessions/" + session.SessionID + "/stream"})
+}
+
+func (s *Server) startTurnForSession(ctx context.Context, workspaceID, token string, turn protocol.TurnRequest) (SessionRun, error) {
+	run, err := s.store.StartRun(ctx, turn)
+	if err != nil {
+		return SessionRun{}, err
+	}
+	stored, err := s.appendAndPublish(ctx, userMessageEvent(turn))
+	if err != nil {
+		_, _ = s.store.FinishRun(context.Background(), turn.SessionID, turn.RunID, RunStatusFailed, &protocol.EventErrorPayload{Message: err.Error()})
+		return SessionRun{}, err
+	}
+	run.LastEventID = stored.ID
 	go func() {
-		defer close(runDone)
 		err := s.pods.Turn(context.Background(), workspaceID, token, turn, func(event protocol.UniversalEvent) error {
 			_, err := s.appendAndPublish(context.Background(), event)
 			return err
@@ -61,35 +129,58 @@ func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request) {
 			event.Error = &protocol.EventErrorPayload{Message: err.Error()}
 			_, _ = s.appendAndPublish(context.Background(), event)
 		}
+		s.finishRunAfterTurn(context.Background(), run, err)
 	}()
+	return run, nil
+}
 
-	for {
-		select {
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-			if err := sse.WriteEventWithID(w, event.ID, event.Payload); err != nil {
-				return
-			}
-		case <-runDone:
-			for {
-				select {
-				case event, ok := <-events:
-					if !ok {
-						return
-					}
-					if err := sse.WriteEventWithID(w, event.ID, event.Payload); err != nil {
-						return
-					}
-				default:
-					return
-				}
-			}
-		case <-r.Context().Done():
-			return
-		}
+func (s *Server) workspaceExecutionToken(ctx context.Context, workspaceID string) (string, bool) {
+	token, ok := s.workspaceToken(ctx, workspaceID)
+	if !ok && s.config.DevAgentPodToken != "" {
+		return s.config.DevAgentPodToken, true
 	}
+	return token, ok
+}
+
+func turnRequestFromFirstTurn(workspaceID, sessionID string, firstTurn *protocol.FirstTurnRequest) protocol.TurnRequest {
+	turn := protocol.TurnRequest{
+		WorkspaceID:      workspaceID,
+		SessionID:        sessionID,
+		Message:          firstTurn.Message,
+		ActiveSkillSlugs: firstTurn.ActiveSkillSlugs,
+		Source:           firstTurn.Source,
+	}
+	normalizeTurnRequest(&turn)
+	return turn
+}
+
+func turnRequestFromCreateTurn(session SessionProjection, req protocol.CreateTurnRequest) protocol.TurnRequest {
+	turn := protocol.TurnRequest{
+		WorkspaceID:      session.WorkspaceID,
+		SessionID:        session.SessionID,
+		Message:          req.Message,
+		ActiveSkillSlugs: req.ActiveSkillSlugs,
+		Source:           req.Source,
+	}
+	normalizeTurnRequest(&turn)
+	return turn
+}
+
+func normalizeTurnRequest(turn *protocol.TurnRequest) {
+	if turn.RunID == "" {
+		turn.RunID = newRunID()
+	}
+	if turn.Source == "" {
+		turn.Source = "api"
+	}
+}
+
+func newSessionID() string {
+	return "sess_" + time.Now().UTC().Format("20060102150405.000000000")
+}
+
+func newRunID() string {
+	return "run_" + time.Now().UTC().Format("20060102150405.000000000")
 }
 
 func userMessageEvent(turn protocol.TurnRequest) protocol.UniversalEvent {
@@ -179,6 +270,68 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"messages": messages})
 }
 
+func (s *Server) handleSessionState(w http.ResponseWriter, r *http.Request) {
+	state, err := s.store.SessionState(r.Context(), r.PathValue("sessionId"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, state)
+}
+
+func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionId")
+	var req protocol.InterruptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ExpectedRunID == "" {
+		http.Error(w, "expectedRunId is required", http.StatusBadRequest)
+		return
+	}
+	if req.Reason == "" {
+		req.Reason = "user_stop"
+	}
+	result, err := s.store.RequestRunInterrupt(r.Context(), sessionID, req.ExpectedRunID, req.Reason)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !result.Interrupted {
+		if result.Reason != "already_terminal" {
+			w.WriteHeader(http.StatusConflict)
+		}
+		writeJSON(w, result)
+		return
+	}
+
+	cancelDelivered := false
+	var cancelError string
+	if result.Run != nil {
+		token, ok := s.workspaceToken(r.Context(), result.Run.WorkspaceID)
+		if !ok && s.config.DevAgentPodToken != "" {
+			token = s.config.DevAgentPodToken
+			ok = true
+		}
+		if ok {
+			err = s.pods.Cancel(r.Context(), result.Run.WorkspaceID, token, sessionID, req)
+			if err == nil {
+				cancelDelivered = true
+			}
+		} else {
+			err = errors.New("workspace has no active agent-pod token")
+		}
+		if err != nil {
+			cancelError = err.Error()
+			event := protocol.NewEvent(protocol.EventError, protocol.TurnRequest{WorkspaceID: result.Run.WorkspaceID, SessionID: sessionID, RunID: req.ExpectedRunID})
+			event.Error = &protocol.EventErrorPayload{Message: "cancel request failed: " + cancelError}
+			_, _ = s.appendAndPublish(context.Background(), event)
+		}
+	}
+	writeJSON(w, map[string]any{"interrupted": true, "run": result.Run, "cancelDelivered": cancelDelivered, "cancelError": cancelError})
+}
+
 func (s *Server) appendAndPublish(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {
 	stored, err := s.store.Append(ctx, event)
 	if err != nil {
@@ -186,6 +339,22 @@ func (s *Server) appendAndPublish(ctx context.Context, event protocol.UniversalE
 	}
 	s.hub.Publish(stored)
 	return stored, nil
+}
+
+func (s *Server) finishRunAfterTurn(ctx context.Context, started SessionRun, turnErr error) {
+	run, ok, err := s.store.GetRun(ctx, started.SessionID, started.RunID)
+	if err != nil || !ok || isTerminalRunStatus(run.Status) {
+		return
+	}
+	status := RunStatusCompleted
+	var eventError *protocol.EventErrorPayload
+	if run.Status == RunStatusCancelling {
+		status = RunStatusCancelled
+	} else if turnErr != nil {
+		status = RunStatusFailed
+		eventError = &protocol.EventErrorPayload{Message: turnErr.Error()}
+	}
+	_, _ = s.store.FinishRun(ctx, started.SessionID, started.RunID, status, eventError)
 }
 
 func (s *Server) writeReplay(w http.ResponseWriter, r *http.Request, sessionID string, cursor *int64) error {
