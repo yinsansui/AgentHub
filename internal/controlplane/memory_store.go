@@ -123,6 +123,126 @@ func (s *MemoryStore) ListMCPCandidates(ctx context.Context, workspaceID string)
 	return out, nil
 }
 
+func (s *MemoryStore) ListWorkspaceSkills(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []SkillDefinitionWithFiles{}
+	for _, skill := range s.skills {
+		if skill.Definition.Source == protocol.SkillSourceWorkspace && skill.Definition.ScopeType == "workspace" && skill.Definition.ScopeID == workspaceID {
+			out = append(out, cloneSkillWithFiles(skill))
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) GetWorkspaceSkill(ctx context.Context, workspaceID, slug string) (SkillDefinitionWithFiles, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, skill := range s.skills {
+		if skill.Definition.Source == protocol.SkillSourceWorkspace && skill.Definition.ScopeType == "workspace" && skill.Definition.ScopeID == workspaceID && skill.Definition.Slug == slug {
+			return cloneSkillWithFiles(skill), true, nil
+		}
+	}
+	return SkillDefinitionWithFiles{}, false, nil
+}
+
+func (s *MemoryStore) UpsertWorkspaceSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	key := skill.Definition.ID
+	if existing, ok := s.skills[key]; ok {
+		skill.Definition.Version = existing.Definition.Version + 1
+		skill.Definition.CreatedAt = existing.Definition.CreatedAt
+	} else {
+		skill.Definition.Version = 1
+		skill.Definition.CreatedAt = now
+	}
+	skill.Definition.Source = protocol.SkillSourceWorkspace
+	skill.Definition.ScopeType = "workspace"
+	skill.Definition.ScopeID = workspaceID
+	skill.Definition.UpdatedAt = now
+	for idx := range skill.Files {
+		skill.Files[idx].SkillID = skill.Definition.ID
+		skill.Files[idx].CreatedAt = now
+		skill.Files[idx].UpdatedAt = now
+	}
+	s.skills[key] = cloneSkillWithFiles(skill)
+	return cloneSkillWithFiles(skill), nil
+}
+
+func (s *MemoryStore) DeleteWorkspaceSkill(ctx context.Context, workspaceID, slug string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, skill := range s.skills {
+		if skill.Definition.Source == protocol.SkillSourceWorkspace && skill.Definition.ScopeType == "workspace" && skill.Definition.ScopeID == workspaceID && skill.Definition.Slug == slug {
+			delete(s.skills, key)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *MemoryStore) ListWorkspaceMCPServers(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []MCPServerDefinitionWithEnv{}
+	for _, server := range s.mcpServers {
+		if server.Definition.Source == protocol.SkillSourceWorkspace && server.Definition.ScopeType == "workspace" && server.Definition.ScopeID == workspaceID {
+			out = append(out, cloneMCPServerWithEnv(server))
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) GetWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (MCPServerDefinitionWithEnv, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, server := range s.mcpServers {
+		if server.Definition.Source == protocol.SkillSourceWorkspace && server.Definition.ScopeType == "workspace" && server.Definition.ScopeID == workspaceID && server.Definition.Name == name {
+			return cloneMCPServerWithEnv(server), true, nil
+		}
+	}
+	return MCPServerDefinitionWithEnv{}, false, nil
+}
+
+func (s *MemoryStore) UpsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	key := server.Definition.ID
+	if existing, ok := s.mcpServers[key]; ok {
+		server.Definition.Version = existing.Definition.Version + 1
+		server.Definition.CreatedAt = existing.Definition.CreatedAt
+	} else {
+		server.Definition.Version = 1
+		server.Definition.CreatedAt = now
+	}
+	server.Definition.Source = protocol.SkillSourceWorkspace
+	server.Definition.ScopeType = "workspace"
+	server.Definition.ScopeID = workspaceID
+	server.Definition.UpdatedAt = now
+	for idx := range server.Env {
+		server.Env[idx].ServerID = server.Definition.ID
+		server.Env[idx].CreatedAt = now
+		server.Env[idx].UpdatedAt = now
+	}
+	s.mcpServers[key] = cloneMCPServerWithEnv(server)
+	return cloneMCPServerWithEnv(server), nil
+}
+
+func (s *MemoryStore) DeleteWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, server := range s.mcpServers {
+		if server.Definition.Source == protocol.SkillSourceWorkspace && server.Definition.ScopeType == "workspace" && server.Definition.ScopeID == workspaceID && server.Definition.Name == name {
+			delete(s.mcpServers, key)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *MemoryStore) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -356,4 +476,18 @@ func cloneMetadata(metadata map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func cloneSkillWithFiles(skill SkillDefinitionWithFiles) SkillDefinitionWithFiles {
+	files := make([]SkillFile, len(skill.Files))
+	copy(files, skill.Files)
+	return SkillDefinitionWithFiles{Definition: skill.Definition, Files: files}
+}
+
+func cloneMCPServerWithEnv(server MCPServerDefinitionWithEnv) MCPServerDefinitionWithEnv {
+	env := make([]MCPServerEnv, len(server.Env))
+	copy(env, server.Env)
+	def := server.Definition
+	def.Args = append([]string(nil), def.Args...)
+	return MCPServerDefinitionWithEnv{Definition: def, Env: env}
 }

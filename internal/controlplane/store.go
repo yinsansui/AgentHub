@@ -36,6 +36,14 @@ type EventStore interface {
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
 	ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error)
 	ListMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error)
+	ListWorkspaceSkills(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error)
+	GetWorkspaceSkill(ctx context.Context, workspaceID, slug string) (SkillDefinitionWithFiles, bool, error)
+	UpsertWorkspaceSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error)
+	DeleteWorkspaceSkill(ctx context.Context, workspaceID, slug string) (bool, error)
+	ListWorkspaceMCPServers(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error)
+	GetWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (MCPServerDefinitionWithEnv, bool, error)
+	UpsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error)
+	DeleteWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (bool, error)
 	Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error)
 	ListEventsBySession(ctx context.Context, sessionID string, afterID int64, limit int) ([]StoredEvent, error)
 	ListMessagesBySession(ctx context.Context, sessionID string) ([]MessageProjection, error)
@@ -386,6 +394,38 @@ func (s *Store) ListSkillCandidates(ctx context.Context, workspaceID string) ([]
 
 func (s *Store) ListMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
 	return s.listMCPCandidates(ctx, workspaceID)
+}
+
+func (s *Store) ListWorkspaceSkills(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
+	return s.listWorkspaceSkills(ctx, workspaceID)
+}
+
+func (s *Store) GetWorkspaceSkill(ctx context.Context, workspaceID, slug string) (SkillDefinitionWithFiles, bool, error) {
+	return s.getWorkspaceSkill(ctx, workspaceID, slug)
+}
+
+func (s *Store) UpsertWorkspaceSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	return s.upsertWorkspaceSkill(ctx, workspaceID, skill)
+}
+
+func (s *Store) DeleteWorkspaceSkill(ctx context.Context, workspaceID, slug string) (bool, error) {
+	return s.deleteWorkspaceSkill(ctx, workspaceID, slug)
+}
+
+func (s *Store) ListWorkspaceMCPServers(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
+	return s.listWorkspaceMCPServers(ctx, workspaceID)
+}
+
+func (s *Store) GetWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (MCPServerDefinitionWithEnv, bool, error) {
+	return s.getWorkspaceMCPServer(ctx, workspaceID, name)
+}
+
+func (s *Store) UpsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	return s.upsertWorkspaceMCPServer(ctx, workspaceID, server)
+}
+
+func (s *Store) DeleteWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (bool, error) {
+	return s.deleteWorkspaceMCPServer(ctx, workspaceID, name)
 }
 
 func (s *Store) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {

@@ -360,6 +360,22 @@ MCP 数据模型第一版只包含：
 
 `mcp_server_env` 第一版不支持 sensitive 字段，也不预留 secret / encrypted 字段。
 
+第一版 control-plane 只暴露 workspace source 的定义管理 API：
+
+```text
+PUT    /workspaces/{workspaceId}/skills/{slug}
+GET    /workspaces/{workspaceId}/skills
+GET    /workspaces/{workspaceId}/skills/{slug}
+DELETE /workspaces/{workspaceId}/skills/{slug}
+
+PUT    /workspaces/{workspaceId}/mcp-servers/{name}
+GET    /workspaces/{workspaceId}/mcp-servers
+GET    /workspaces/{workspaceId}/mcp-servers/{name}
+DELETE /workspaces/{workspaceId}/mcp-servers/{name}
+```
+
+这些 API 只更新定义真相源，不触碰已有 session cwd，也不触发 reload。
+
 已有 session 的 skill 文件和 MCP 配置不再随 `skill_definitions` / `skill_files` / `mcp_server_definitions` / `mcp_server_env` 后续修改而变化；如果需要新版配置，需要创建新的 session。
 
 ### 8.3 短生命周期：Run Invocation Context

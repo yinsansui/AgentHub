@@ -373,6 +373,350 @@ ORDER BY d.name ASC, d.source ASC, d.updated_at DESC, e.name ASC
 	return definitions, rows.Err()
 }
 
+func (s *Store) listWorkspaceSkills(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
+	return s.queryWorkspaceSkills(ctx, workspaceID, "")
+}
+
+func (s *Store) getWorkspaceSkill(ctx context.Context, workspaceID, slug string) (SkillDefinitionWithFiles, bool, error) {
+	skills, err := s.queryWorkspaceSkills(ctx, workspaceID, slug)
+	if err != nil || len(skills) == 0 {
+		return SkillDefinitionWithFiles{}, false, err
+	}
+	return skills[0], true, nil
+}
+
+func (s *Store) upsertWorkspaceSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SkillDefinitionWithFiles{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	def := skill.Definition
+	err = tx.QueryRow(ctx, `
+INSERT INTO skill_definitions (id, slug, source, scope_type, scope_id, name, description, version, content_hash, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, now())
+ON CONFLICT (source, scope_type, scope_id, slug)
+DO UPDATE SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description,
+  content_hash = EXCLUDED.content_hash,
+  version = skill_definitions.version + 1,
+  updated_at = now()
+RETURNING id, slug, source, scope_type, scope_id, name, description, version, content_hash, created_at, updated_at
+`, def.ID, def.Slug, protocol.SkillSourceWorkspace, "workspace", workspaceID, def.Name, def.Description, def.ContentHash).Scan(
+		&def.ID, &def.Slug, &def.Source, &def.ScopeType, &def.ScopeID, &def.Name, &def.Description, &def.Version, &def.ContentHash, &def.CreatedAt, &def.UpdatedAt,
+	)
+	if err != nil {
+		return SkillDefinitionWithFiles{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM skill_files WHERE skill_id = $1`, def.ID); err != nil {
+		return SkillDefinitionWithFiles{}, err
+	}
+	files := make([]SkillFile, 0, len(skill.Files))
+	for _, file := range skill.Files {
+		var saved SkillFile
+		err := tx.QueryRow(ctx, `
+INSERT INTO skill_files (id, skill_id, path, content, content_hash, updated_at)
+VALUES ($1, $2, $3, $4, $5, now())
+RETURNING id, skill_id, path, content, content_hash, created_at, updated_at
+`, file.ID, def.ID, file.Path, file.Content, file.ContentHash).Scan(
+			&saved.ID, &saved.SkillID, &saved.Path, &saved.Content, &saved.ContentHash, &saved.CreatedAt, &saved.UpdatedAt,
+		)
+		if err != nil {
+			return SkillDefinitionWithFiles{}, err
+		}
+		files = append(files, saved)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return SkillDefinitionWithFiles{}, err
+	}
+	return SkillDefinitionWithFiles{Definition: def, Files: files}, nil
+}
+
+func (s *Store) deleteWorkspaceSkill(ctx context.Context, workspaceID, slug string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var skillID string
+	err = tx.QueryRow(ctx, `
+DELETE FROM skill_definitions
+WHERE source = $1 AND scope_type = 'workspace' AND scope_id = $2 AND slug = $3
+RETURNING id
+`, protocol.SkillSourceWorkspace, workspaceID, slug).Scan(&skillID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM skill_files WHERE skill_id = $1`, skillID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) queryWorkspaceSkills(ctx context.Context, workspaceID, slug string) ([]SkillDefinitionWithFiles, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+  d.id, d.slug, d.source, d.scope_type, d.scope_id, d.name, d.description,
+  d.version, d.content_hash, d.created_at, d.updated_at,
+  f.id, f.skill_id, f.path, f.content, f.content_hash, f.created_at, f.updated_at
+FROM skill_definitions d
+LEFT JOIN skill_files f ON f.skill_id = d.id
+WHERE d.source = $1 AND d.scope_type = 'workspace' AND d.scope_id = $2 AND ($3 = '' OR d.slug = $3)
+ORDER BY d.slug ASC, f.path ASC
+`, protocol.SkillSourceWorkspace, workspaceID, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSkillDefinitionsWithFiles(rows)
+}
+
+func scanSkillDefinitionsWithFiles(rows pgx.Rows) ([]SkillDefinitionWithFiles, error) {
+	definitions := []SkillDefinitionWithFiles{}
+	byID := map[string]int{}
+	for rows.Next() {
+		var def SkillDefinition
+		var file SkillFile
+		var fileID sql.NullString
+		var fileSkillID sql.NullString
+		var filePath sql.NullString
+		var fileContent sql.NullString
+		var fileHash sql.NullString
+		var fileCreatedAt sql.NullTime
+		var fileUpdatedAt sql.NullTime
+		if err := rows.Scan(
+			&def.ID,
+			&def.Slug,
+			&def.Source,
+			&def.ScopeType,
+			&def.ScopeID,
+			&def.Name,
+			&def.Description,
+			&def.Version,
+			&def.ContentHash,
+			&def.CreatedAt,
+			&def.UpdatedAt,
+			&fileID,
+			&fileSkillID,
+			&filePath,
+			&fileContent,
+			&fileHash,
+			&fileCreatedAt,
+			&fileUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		idx, ok := byID[def.ID]
+		if !ok {
+			definitions = append(definitions, SkillDefinitionWithFiles{Definition: def})
+			idx = len(definitions) - 1
+			byID[def.ID] = idx
+		}
+		if fileID.Valid {
+			file.ID = fileID.String
+			file.SkillID = fileSkillID.String
+			file.Path = filePath.String
+			file.Content = fileContent.String
+			file.ContentHash = fileHash.String
+			if fileCreatedAt.Valid {
+				file.CreatedAt = fileCreatedAt.Time
+			}
+			if fileUpdatedAt.Valid {
+				file.UpdatedAt = fileUpdatedAt.Time
+			}
+			definitions[idx].Files = append(definitions[idx].Files, file)
+		}
+	}
+	return definitions, rows.Err()
+}
+
+func (s *Store) listWorkspaceMCPServers(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
+	return s.queryWorkspaceMCPServers(ctx, workspaceID, "")
+}
+
+func (s *Store) getWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (MCPServerDefinitionWithEnv, bool, error) {
+	servers, err := s.queryWorkspaceMCPServers(ctx, workspaceID, name)
+	if err != nil || len(servers) == 0 {
+		return MCPServerDefinitionWithEnv{}, false, err
+	}
+	return servers[0], true, nil
+}
+
+func (s *Store) upsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return MCPServerDefinitionWithEnv{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	def := server.Definition
+	argsPayload, err := json.Marshal(def.Args)
+	if err != nil {
+		return MCPServerDefinitionWithEnv{}, err
+	}
+	err = tx.QueryRow(ctx, `
+INSERT INTO mcp_server_definitions (id, name, source, scope_type, scope_id, command, args, transport, version, content_hash, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 1, $9, now())
+ON CONFLICT (source, scope_type, scope_id, name)
+DO UPDATE SET
+  command = EXCLUDED.command,
+  args = EXCLUDED.args,
+  transport = EXCLUDED.transport,
+  content_hash = EXCLUDED.content_hash,
+  version = mcp_server_definitions.version + 1,
+  updated_at = now()
+RETURNING id, name, source, scope_type, scope_id, command, args, transport, version, content_hash, created_at, updated_at
+`, def.ID, def.Name, protocol.SkillSourceWorkspace, "workspace", workspaceID, def.Command, argsPayload, def.Transport, def.ContentHash).Scan(
+		&def.ID, &def.Name, &def.Source, &def.ScopeType, &def.ScopeID, &def.Command, &argsPayload, &def.Transport, &def.Version, &def.ContentHash, &def.CreatedAt, &def.UpdatedAt,
+	)
+	if err != nil {
+		return MCPServerDefinitionWithEnv{}, err
+	}
+	if len(argsPayload) > 0 {
+		if err := json.Unmarshal(argsPayload, &def.Args); err != nil {
+			return MCPServerDefinitionWithEnv{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM mcp_server_env WHERE server_id = $1`, def.ID); err != nil {
+		return MCPServerDefinitionWithEnv{}, err
+	}
+	env := make([]MCPServerEnv, 0, len(server.Env))
+	for _, item := range server.Env {
+		var saved MCPServerEnv
+		err := tx.QueryRow(ctx, `
+INSERT INTO mcp_server_env (id, server_id, name, value, updated_at)
+VALUES ($1, $2, $3, $4, now())
+RETURNING id, server_id, name, value, created_at, updated_at
+`, item.ID, def.ID, item.Name, item.Value).Scan(
+			&saved.ID, &saved.ServerID, &saved.Name, &saved.Value, &saved.CreatedAt, &saved.UpdatedAt,
+		)
+		if err != nil {
+			return MCPServerDefinitionWithEnv{}, err
+		}
+		env = append(env, saved)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return MCPServerDefinitionWithEnv{}, err
+	}
+	return MCPServerDefinitionWithEnv{Definition: def, Env: env}, nil
+}
+
+func (s *Store) deleteWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var serverID string
+	err = tx.QueryRow(ctx, `
+DELETE FROM mcp_server_definitions
+WHERE source = $1 AND scope_type = 'workspace' AND scope_id = $2 AND name = $3
+RETURNING id
+`, protocol.SkillSourceWorkspace, workspaceID, name).Scan(&serverID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM mcp_server_env WHERE server_id = $1`, serverID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) queryWorkspaceMCPServers(ctx context.Context, workspaceID, name string) ([]MCPServerDefinitionWithEnv, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+  d.id, d.name, d.source, d.scope_type, d.scope_id, d.command, d.args,
+  d.transport, d.version, d.content_hash, d.created_at, d.updated_at,
+  e.id, e.server_id, e.name, e.value, e.created_at, e.updated_at
+FROM mcp_server_definitions d
+LEFT JOIN mcp_server_env e ON e.server_id = d.id
+WHERE d.source = $1 AND d.scope_type = 'workspace' AND d.scope_id = $2 AND ($3 = '' OR d.name = $3)
+ORDER BY d.name ASC, e.name ASC
+`, protocol.SkillSourceWorkspace, workspaceID, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMCPServerDefinitionsWithEnv(rows)
+}
+
+func scanMCPServerDefinitionsWithEnv(rows pgx.Rows) ([]MCPServerDefinitionWithEnv, error) {
+	definitions := []MCPServerDefinitionWithEnv{}
+	byID := map[string]int{}
+	for rows.Next() {
+		var def MCPServerDefinition
+		var argsPayload []byte
+		var env MCPServerEnv
+		var envID sql.NullString
+		var envServerID sql.NullString
+		var envName sql.NullString
+		var envValue sql.NullString
+		var envCreatedAt sql.NullTime
+		var envUpdatedAt sql.NullTime
+		if err := rows.Scan(
+			&def.ID,
+			&def.Name,
+			&def.Source,
+			&def.ScopeType,
+			&def.ScopeID,
+			&def.Command,
+			&argsPayload,
+			&def.Transport,
+			&def.Version,
+			&def.ContentHash,
+			&def.CreatedAt,
+			&def.UpdatedAt,
+			&envID,
+			&envServerID,
+			&envName,
+			&envValue,
+			&envCreatedAt,
+			&envUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if len(argsPayload) > 0 {
+			if err := json.Unmarshal(argsPayload, &def.Args); err != nil {
+				return nil, err
+			}
+		}
+		idx, ok := byID[def.ID]
+		if !ok {
+			definitions = append(definitions, MCPServerDefinitionWithEnv{Definition: def})
+			idx = len(definitions) - 1
+			byID[def.ID] = idx
+		}
+		if envID.Valid {
+			env.ID = envID.String
+			env.ServerID = envServerID.String
+			env.Name = envName.String
+			env.Value = envValue.String
+			if envCreatedAt.Valid {
+				env.CreatedAt = envCreatedAt.Time
+			}
+			if envUpdatedAt.Valid {
+				env.UpdatedAt = envUpdatedAt.Time
+			}
+			definitions[idx].Env = append(definitions[idx].Env, env)
+		}
+	}
+	return definitions, rows.Err()
+}
+
 func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
