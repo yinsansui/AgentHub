@@ -64,6 +64,72 @@ func (s *Server) resolveSessionSkills(ctx context.Context, workspaceID string) (
 	return resolved, nil
 }
 
+func (s *Server) resolveSessionMCPServers(ctx context.Context, workspaceID string) ([]protocol.ResolvedMCPServer, error) {
+	candidates, err := s.store.ListMCPCandidates(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	resolvedByName := map[string]MCPServerDefinitionWithEnv{}
+	shadowedByName := map[string][]protocol.MCPServerShadow{}
+	for _, candidate := range candidates {
+		if candidate.Definition.Name == "" || candidate.Definition.Command == "" {
+			continue
+		}
+		current, exists := resolvedByName[candidate.Definition.Name]
+		if !exists || shouldReplaceMCPServer(candidate.Definition, current.Definition) {
+			if exists {
+				shadowedByName[candidate.Definition.Name] = append(shadowedByName[candidate.Definition.Name], mcpServerShadow(current.Definition))
+			}
+			resolvedByName[candidate.Definition.Name] = candidate
+			continue
+		}
+		shadowedByName[candidate.Definition.Name] = append(shadowedByName[candidate.Definition.Name], mcpServerShadow(candidate.Definition))
+	}
+
+	names := make([]string, 0, len(resolvedByName))
+	for name := range resolvedByName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	resolved := make([]protocol.ResolvedMCPServer, 0, len(names))
+	for _, name := range names {
+		server := resolvedByName[name]
+		env := map[string]string{}
+		for _, item := range server.Env {
+			env[item.Name] = item.Value
+		}
+		if len(env) == 0 {
+			env = nil
+		}
+		transport := server.Definition.Transport
+		if transport == "" {
+			transport = "stdio"
+		}
+		shadowed := shadowedByName[name]
+		sort.Slice(shadowed, func(i, j int) bool {
+			leftPriority := skillSourcePriority(shadowed[i].Source)
+			rightPriority := skillSourcePriority(shadowed[j].Source)
+			if leftPriority == rightPriority {
+				return shadowed[i].Version > shadowed[j].Version
+			}
+			return leftPriority > rightPriority
+		})
+		resolved = append(resolved, protocol.ResolvedMCPServer{
+			Name:         server.Definition.Name,
+			Source:       server.Definition.Source,
+			DefinitionID: server.Definition.ID,
+			Version:      server.Definition.Version,
+			ContentHash:  server.Definition.ContentHash,
+			Command:      server.Definition.Command,
+			Args:         append([]string(nil), server.Definition.Args...),
+			Transport:    transport,
+			Env:          env,
+			Shadowed:     shadowed,
+		})
+	}
+	return resolved, nil
+}
+
 func shouldReplaceSkill(candidate, current SkillDefinition) bool {
 	candidatePriority := skillSourcePriority(candidate.Source)
 	currentPriority := skillSourcePriority(current.Source)
@@ -74,6 +140,31 @@ func shouldReplaceSkill(candidate, current SkillDefinition) bool {
 		return candidate.Version > current.Version
 	}
 	return candidate.UpdatedAt.After(current.UpdatedAt)
+}
+
+func shouldReplaceMCPServer(candidate, current MCPServerDefinition) bool {
+	candidatePriority := skillSourcePriority(candidate.Source)
+	currentPriority := skillSourcePriority(current.Source)
+	if candidatePriority != currentPriority {
+		return candidatePriority > currentPriority
+	}
+	if candidate.Version != current.Version {
+		return candidate.Version > current.Version
+	}
+	return candidate.UpdatedAt.After(current.UpdatedAt)
+}
+
+func isDefinitionVisible(source, scopeType, scopeID, workspaceID string) bool {
+	switch source {
+	case protocol.SkillSourcePlatformBuiltin, protocol.SkillSourceUser:
+		return scopeType == "global"
+	case protocol.SkillSourceWorkspace:
+		return scopeType == "workspace" && scopeID == workspaceID
+	case protocol.SkillSourcePlugin:
+		return scopeType == "global" || (scopeType == "workspace" && scopeID == workspaceID)
+	default:
+		return false
+	}
 }
 
 func skillSourcePriority(source string) int {
@@ -93,4 +184,8 @@ func skillSourcePriority(source string) int {
 
 func skillShadow(def SkillDefinition) protocol.SkillShadow {
 	return protocol.SkillShadow{Source: def.Source, DefinitionID: def.ID, Version: def.Version, ContentHash: def.ContentHash}
+}
+
+func mcpServerShadow(def MCPServerDefinition) protocol.MCPServerShadow {
+	return protocol.MCPServerShadow{Source: def.Source, DefinitionID: def.ID, Version: def.Version, ContentHash: def.ContentHash}
 }

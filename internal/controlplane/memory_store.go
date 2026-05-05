@@ -22,6 +22,7 @@ type MemoryStore struct {
 	activeRuns  map[string]string
 	runs        map[string]SessionRun
 	skills      map[string]SkillDefinitionWithFiles
+	mcpServers  map[string]MCPServerDefinitionWithEnv
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -35,6 +36,7 @@ func NewMemoryStore() *MemoryStore {
 		activeRuns: map[string]string{},
 		runs:       map[string]SessionRun{},
 		skills:     map[string]SkillDefinitionWithFiles{},
+		mcpServers: map[string]MCPServerDefinitionWithEnv{},
 	}
 }
 
@@ -95,25 +97,28 @@ func (s *MemoryStore) ListSkillCandidates(ctx context.Context, workspaceID strin
 	out := make([]SkillDefinitionWithFiles, 0, len(s.skills))
 	for _, skill := range s.skills {
 		def := skill.Definition
-		switch def.Source {
-		case protocol.SkillSourcePlatformBuiltin, protocol.SkillSourceUser:
-			if def.ScopeType != "global" {
-				continue
-			}
-		case protocol.SkillSourceWorkspace:
-			if def.ScopeType != "workspace" || def.ScopeID != workspaceID {
-				continue
-			}
-		case protocol.SkillSourcePlugin:
-			if def.ScopeType != "global" && !(def.ScopeType == "workspace" && def.ScopeID == workspaceID) {
-				continue
-			}
-		default:
+		if !isDefinitionVisible(def.Source, def.ScopeType, def.ScopeID, workspaceID) {
 			continue
 		}
 		files := make([]SkillFile, len(skill.Files))
 		copy(files, skill.Files)
 		out = append(out, SkillDefinitionWithFiles{Definition: def, Files: files})
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ListMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]MCPServerDefinitionWithEnv, 0, len(s.mcpServers))
+	for _, server := range s.mcpServers {
+		def := server.Definition
+		if !isDefinitionVisible(def.Source, def.ScopeType, def.ScopeID, workspaceID) {
+			continue
+		}
+		env := make([]MCPServerEnv, len(server.Env))
+		copy(env, server.Env)
+		out = append(out, MCPServerDefinitionWithEnv{Definition: def, Env: env})
 	}
 	return out, nil
 }

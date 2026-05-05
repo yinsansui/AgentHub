@@ -43,11 +43,17 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	mcpServers, err := s.resolveSessionMCPServers(r.Context(), workspaceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := s.pods.PrepareSession(r.Context(), workspaceID, token, protocol.PrepareSessionRequest{
 		WorkspaceID: workspaceID,
 		TaskID:      taskID,
 		SessionID:   sessionID,
 		Skills:      skills,
+		MCPServers:  mcpServers,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

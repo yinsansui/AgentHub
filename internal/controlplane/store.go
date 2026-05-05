@@ -35,6 +35,7 @@ type EventStore interface {
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
 	ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error)
+	ListMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error)
 	Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error)
 	ListEventsBySession(ctx context.Context, sessionID string, afterID int64, limit int) ([]StoredEvent, error)
 	ListMessagesBySession(ctx context.Context, sessionID string) ([]MessageProjection, error)
@@ -139,6 +140,35 @@ type SkillFile struct {
 type SkillDefinitionWithFiles struct {
 	Definition SkillDefinition `json:"definition"`
 	Files      []SkillFile     `json:"files"`
+}
+
+type MCPServerDefinition struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Source      string    `json:"source"`
+	ScopeType   string    `json:"scopeType"`
+	ScopeID     string    `json:"scopeId,omitempty"`
+	Command     string    `json:"command"`
+	Args        []string  `json:"args,omitempty"`
+	Transport   string    `json:"transport"`
+	Version     int64     `json:"version"`
+	ContentHash string    `json:"contentHash"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type MCPServerEnv struct {
+	ID        string    `json:"id"`
+	ServerID  string    `json:"serverId"`
+	Name      string    `json:"name"`
+	Value     string    `json:"value"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type MCPServerDefinitionWithEnv struct {
+	Definition MCPServerDefinition `json:"definition"`
+	Env        []MCPServerEnv      `json:"env"`
 }
 
 type ActiveRunConflict struct {
@@ -285,6 +315,31 @@ CREATE TABLE IF NOT EXISTS skill_files (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_definitions_scope_slug ON skill_definitions (source, scope_type, scope_id, slug);
 CREATE INDEX IF NOT EXISTS idx_skill_definitions_slug_source ON skill_definitions (slug, source, updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_files_skill_path ON skill_files (skill_id, path);
+CREATE TABLE IF NOT EXISTS mcp_server_definitions (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL,
+  scope_type TEXT NOT NULL DEFAULT 'global',
+  scope_id TEXT NOT NULL DEFAULT '',
+  command TEXT NOT NULL,
+  args JSONB NOT NULL DEFAULT '[]'::jsonb,
+  transport TEXT NOT NULL DEFAULT 'stdio',
+  version BIGINT NOT NULL DEFAULT 1,
+  content_hash TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS mcp_server_env (
+  id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_server_definitions_scope_name ON mcp_server_definitions (source, scope_type, scope_id, name);
+CREATE INDEX IF NOT EXISTS idx_mcp_server_definitions_name_source ON mcp_server_definitions (name, source, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_server_env_server_name ON mcp_server_env (server_id, name);
 `)
 	return err
 }
@@ -327,6 +382,10 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjec
 
 func (s *Store) ListSkillCandidates(ctx context.Context, workspaceID string) ([]SkillDefinitionWithFiles, error) {
 	return s.listSkillCandidates(ctx, workspaceID)
+}
+
+func (s *Store) ListMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
+	return s.listMCPCandidates(ctx, workspaceID)
 }
 
 func (s *Store) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {

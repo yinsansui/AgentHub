@@ -47,7 +47,13 @@ func (s *Server) prepareSession(req protocol.PrepareSessionRequest) (string, err
 	if err := materializeSkills(filepath.Join(sessionDir, ".claude", "skills"), req.Skills); err != nil {
 		return "", err
 	}
+	if err := materializeMCPConfig(filepath.Join(sessionDir, ".agents", "mcp.json"), req.MCPServers); err != nil {
+		return "", err
+	}
 	if err := writeSkillManifest(sessionDir, req.SessionID, req.Skills); err != nil {
+		return "", err
+	}
+	if err := writeMCPManifest(sessionDir, req.SessionID, req.MCPServers); err != nil {
 		return "", err
 	}
 	return sessionDir, nil
@@ -104,6 +110,63 @@ func writeSkillManifest(sessionDir, sessionID string, skills []protocol.Resolved
 		return err
 	}
 	return os.WriteFile(filepath.Join(manifestDir, "skills.manifest.json"), append(payload, '\n'), 0o644)
+}
+
+func materializeMCPConfig(path string, servers []protocol.ResolvedMCPServer) error {
+	config := protocol.MCPConfig{MCPServers: map[string]protocol.MCPServerConfig{}}
+	for _, server := range servers {
+		if err := validatePathSegment(server.Name, "mcp server name"); err != nil {
+			return err
+		}
+		if strings.TrimSpace(server.Command) == "" {
+			return errors.New("mcp server command is required")
+		}
+		config.MCPServers[server.Name] = protocol.MCPServerConfig{
+			Command:   server.Command,
+			Args:      append([]string(nil), server.Args...),
+			Transport: server.Transport,
+			Env:       cloneStringMap(server.Env),
+		}
+	}
+	payload, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(payload, '\n'), 0o644)
+}
+
+func writeMCPManifest(sessionDir, sessionID string, servers []protocol.ResolvedMCPServer) error {
+	manifestDir := filepath.Join(sessionDir, ".agenthub")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(struct {
+		SessionID  string                       `json:"sessionId"`
+		CreatedAt  string                       `json:"createdAt"`
+		MCPServers []protocol.ResolvedMCPServer `json:"mcpServers"`
+	}{
+		SessionID:  sessionID,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		MCPServers: servers,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(manifestDir, "mcp.manifest.json"), append(payload, '\n'), 0o644)
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func ensureFile(path, content string) error {

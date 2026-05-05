@@ -29,10 +29,11 @@ const (
 )
 
 type PrepareSessionRequest struct {
-	WorkspaceID string          `json:"workspaceId"`
-	TaskID      string          `json:"taskId"`
-	SessionID   string          `json:"sessionId"`
-	Skills      []ResolvedSkill `json:"skills"`
+	WorkspaceID string              `json:"workspaceId"`
+	TaskID      string              `json:"taskId"`
+	SessionID   string              `json:"sessionId"`
+	Skills      []ResolvedSkill     `json:"skills"`
+	MCPServers  []ResolvedMCPServer `json:"mcpServers"`
 }
 
 type ResolvedSkill struct {
@@ -62,6 +63,37 @@ type SkillManifest struct {
 	SessionID string          `json:"sessionId"`
 	CreatedAt string          `json:"createdAt"`
 	Skills    []ResolvedSkill `json:"skills"`
+}
+
+type ResolvedMCPServer struct {
+	Name         string            `json:"name"`
+	Source       string            `json:"source"`
+	DefinitionID string            `json:"definitionId"`
+	Version      int64             `json:"version"`
+	ContentHash  string            `json:"contentHash"`
+	Command      string            `json:"command"`
+	Args         []string          `json:"args,omitempty"`
+	Transport    string            `json:"transport,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Shadowed     []MCPServerShadow `json:"shadowed,omitempty"`
+}
+
+type MCPServerShadow struct {
+	Source       string `json:"source"`
+	DefinitionID string `json:"definitionId"`
+	Version      int64  `json:"version"`
+	ContentHash  string `json:"contentHash"`
+}
+
+type MCPConfig struct {
+	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
+}
+
+type MCPServerConfig struct {
+	Command   string            `json:"command"`
+	Args      []string          `json:"args,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
 }
 
 type CreateSessionRequest struct {

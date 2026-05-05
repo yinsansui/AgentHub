@@ -291,6 +291,88 @@ ORDER BY d.slug ASC, d.source ASC, d.updated_at DESC, f.path ASC
 	return definitions, rows.Err()
 }
 
+func (s *Store) listMCPCandidates(ctx context.Context, workspaceID string) ([]MCPServerDefinitionWithEnv, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+  d.id, d.name, d.source, d.scope_type, d.scope_id, d.command, d.args,
+  d.transport, d.version, d.content_hash, d.created_at, d.updated_at,
+  e.id, e.server_id, e.name, e.value, e.created_at, e.updated_at
+FROM mcp_server_definitions d
+LEFT JOIN mcp_server_env e ON e.server_id = d.id
+WHERE
+  (d.source = $2 AND d.scope_type = 'global')
+  OR (d.source = $3 AND d.scope_type = 'workspace' AND d.scope_id = $1)
+  OR (d.source = $4 AND (d.scope_type = 'global' OR (d.scope_type = 'workspace' AND d.scope_id = $1)))
+  OR (d.source = $5 AND d.scope_type = 'global')
+ORDER BY d.name ASC, d.source ASC, d.updated_at DESC, e.name ASC
+`, workspaceID, protocol.SkillSourcePlatformBuiltin, protocol.SkillSourceWorkspace, protocol.SkillSourcePlugin, protocol.SkillSourceUser)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	definitions := []MCPServerDefinitionWithEnv{}
+	byID := map[string]int{}
+	for rows.Next() {
+		var def MCPServerDefinition
+		var argsPayload []byte
+		var env MCPServerEnv
+		var envID sql.NullString
+		var envServerID sql.NullString
+		var envName sql.NullString
+		var envValue sql.NullString
+		var envCreatedAt sql.NullTime
+		var envUpdatedAt sql.NullTime
+		if err := rows.Scan(
+			&def.ID,
+			&def.Name,
+			&def.Source,
+			&def.ScopeType,
+			&def.ScopeID,
+			&def.Command,
+			&argsPayload,
+			&def.Transport,
+			&def.Version,
+			&def.ContentHash,
+			&def.CreatedAt,
+			&def.UpdatedAt,
+			&envID,
+			&envServerID,
+			&envName,
+			&envValue,
+			&envCreatedAt,
+			&envUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if len(argsPayload) > 0 {
+			if err := json.Unmarshal(argsPayload, &def.Args); err != nil {
+				return nil, err
+			}
+		}
+		idx, ok := byID[def.ID]
+		if !ok {
+			definitions = append(definitions, MCPServerDefinitionWithEnv{Definition: def})
+			idx = len(definitions) - 1
+			byID[def.ID] = idx
+		}
+		if envID.Valid {
+			env.ID = envID.String
+			env.ServerID = envServerID.String
+			env.Name = envName.String
+			env.Value = envValue.String
+			if envCreatedAt.Valid {
+				env.CreatedAt = envCreatedAt.Time
+			}
+			if envUpdatedAt.Valid {
+				env.UpdatedAt = envUpdatedAt.Time
+			}
+			definitions[idx].Env = append(definitions[idx].Env, env)
+		}
+	}
+	return definitions, rows.Err()
+}
+
 func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

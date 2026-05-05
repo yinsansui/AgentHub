@@ -278,8 +278,10 @@ user-portal / admin-console
   sessions/
     <sessionId>/
       .agents/skills/
+      .agents/mcp.json
       .claude/skills/
       .agenthub/skills.manifest.json
+      .agenthub/mcp.manifest.json
       docs -> ../../docs
       AGENTS.md -> ../../AGENTS.md
       CLAUDE.md -> ../../CLAUDE.md
@@ -292,8 +294,9 @@ user-portal / admin-console
 1. `docs/` 为当前 task 的共享文档目录
 2. `sessions/<sessionId>/` 是 Agent Core 的真实 cwd
 3. `.agents/skills/` 和 `.claude/skills/` 位于每个 session 自己的 cwd 内，表达 session 创建时冻结的 skill snapshot
-4. `sessions/<sessionId>/docs` 软链接到 task 层级共享目录
-5. `AGENTS.md` 和 `CLAUDE.md` 为当前 task 的任务级指令文件，并软链接到每个 session cwd
+4. `.agents/mcp.json` 位于每个 session 自己的 cwd 内，表达 session 创建时冻结的 MCP server snapshot
+5. `sessions/<sessionId>/docs` 软链接到 task 层级共享目录
+6. `AGENTS.md` 和 `CLAUDE.md` 为当前 task 的任务级指令文件，并软链接到每个 session cwd
 
 `repos/` 不由平台核心创建；仓库目录、clone 状态和 session 内 repo 可见性后续由 repo plugin 负责。
 
@@ -303,7 +306,7 @@ user-portal / admin-console
 
 ## 8. MCP 与 Skill 加载机制
 
-当前阶段优先完成平台通用的 MCP / skill 加载机制，暂缓 repo plugin 等具体业务插件。第一版 skill 不做实时 reload，skill 修改只影响之后创建的新 session。
+当前阶段优先完成平台通用的 MCP / skill 加载机制，暂缓 repo plugin 等具体业务插件。第一版 skill / MCP 都不做实时 reload，定义修改只影响之后创建的新 session。
 
 ### 8.1 长生命周期：Task Runtime Environment
 
@@ -321,7 +324,7 @@ user-portal / admin-console
 
 1. `docs/` 由同一个 task 下的多个 session 共享。
 2. `AGENTS.md` 和 `CLAUDE.md` 是 task 级指令文件。
-3. task 层不直接放 skill；skill 放在每个 session 自己的 cwd 内。
+3. task 层不直接放 skill / MCP 配置；它们放在每个 session 自己的 cwd 内。
 4. task 目录不随每次 run 全量重建。
 5. `repos/` 由 repo plugin 在需要时创建，平台核心不预建。
 
@@ -329,13 +332,13 @@ user-portal / admin-console
 
 ### 8.2 中生命周期：Session Runtime Environment
 
-`session` 创建时绑定到一个 `task`，由 control-plane 解析 skill 列表并按覆盖优先级生成最终 skill snapshot：
+`session` 创建时绑定到一个 `task`，由 control-plane 解析 skill / MCP 列表并按覆盖优先级生成最终 snapshot：
 
 ```text
 user > plugin > workspace > platform_builtin
 ```
 
-同一个 `slug` 只 materialize 一个最终版本，目录不带 source 前缀：
+skill 以 `slug` 覆盖，同一个 `slug` 只 materialize 一个最终版本，目录不带 source 前缀：
 
 ```text
 /workspace/tasks/<taskId>/sessions/<sessionId>/
@@ -343,7 +346,21 @@ user > plugin > workspace > platform_builtin
   .claude/skills/<slug>/
 ```
 
-已有 session 的 skill 文件不再随 `skill_definitions` / `skill_files` 后续修改而变化；如果需要新版 skill，需要创建新的 session。
+MCP 以 `name` 覆盖，同一个 `name` 只写入一个最终 server 定义：
+
+```text
+/workspace/tasks/<taskId>/sessions/<sessionId>/
+  .agents/mcp.json
+```
+
+MCP 数据模型第一版只包含：
+
+1. `mcp_server_definitions`
+2. `mcp_server_env`
+
+`mcp_server_env` 第一版不支持 sensitive 字段，也不预留 secret / encrypted 字段。
+
+已有 session 的 skill 文件和 MCP 配置不再随 `skill_definitions` / `skill_files` / `mcp_server_definitions` / `mcp_server_env` 后续修改而变化；如果需要新版配置，需要创建新的 session。
 
 ### 8.3 短生命周期：Run Invocation Context
 
