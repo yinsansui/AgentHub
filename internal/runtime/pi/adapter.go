@@ -91,10 +91,11 @@ func (a PiCLIAdapter) RunTurn(ctx context.Context, req protocol.TurnRequest, emi
 		_ = cmd.Process.Kill()
 		return err
 	}
+	var assistantText strings.Builder
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	for scanner.Scan() {
-		if err := mapPiJSONLine(req, itemID, scanner.Text(), emit); err != nil {
+		if err := mapPiJSONLine(req, itemID, scanner.Text(), &assistantText, emit); err != nil {
 			_ = cmd.Process.Kill()
 			return err
 		}
@@ -111,7 +112,7 @@ func (a PiCLIAdapter) RunTurn(ctx context.Context, req protocol.TurnRequest, emi
 	return emit(ended)
 }
 
-func mapPiJSONLine(req protocol.TurnRequest, itemID string, line string, emit func(protocol.UniversalEvent) error) error {
+func mapPiJSONLine(req protocol.TurnRequest, itemID string, line string, assistantText *strings.Builder, emit func(protocol.UniversalEvent) error) error {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return fmt.Errorf("parse pi json line: %w", err)
@@ -130,6 +131,7 @@ func mapPiJSONLine(req protocol.TurnRequest, itemID string, line string, emit fu
 			return emit(e)
 		case "text_delta":
 			delta, _ := assistantEvent["delta"].(string)
+			assistantText.WriteString(delta)
 			e := protocol.NewEvent(protocol.EventItemDelta, req)
 			e.ItemID = itemID
 			e.Role = "assistant"
@@ -144,6 +146,12 @@ func mapPiJSONLine(req protocol.TurnRequest, itemID string, line string, emit fu
 		e := protocol.NewEvent(protocol.EventItemCompleted, req)
 		e.ItemID = itemID
 		e.Role = "assistant"
+		e.Item = &protocol.UniversalItem{
+			ID:      itemID,
+			Type:    "message",
+			Role:    "assistant",
+			Content: []protocol.UniversalBlock{{Type: "text", Text: assistantText.String()}},
+		}
 		e.Metadata = map[string]any{"piEvent": raw, "completedAt": time.Now().UTC().Format(time.RFC3339Nano)}
 		return emit(e)
 	case "error":

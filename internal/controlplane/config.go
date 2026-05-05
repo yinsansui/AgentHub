@@ -12,9 +12,9 @@ type Config struct {
 	DockerNetwork           string
 	AgentPodImage           string
 	WorkspaceRoot           string
-	StatePath               string
 	AgentPodBaseURLTemplate string
 	DevAgentPodToken        string
+	DatabaseURL             string
 }
 
 func LoadConfig() Config {
@@ -25,9 +25,9 @@ func LoadConfig() Config {
 		DockerNetwork:           getenv("AGENTHUB_DOCKER_NETWORK", "agenthub"),
 		AgentPodImage:           getenv("AGENTHUB_AGENT_POD_IMAGE", "agenthub-pi-agent-pod:dev"),
 		WorkspaceRoot:           getenv("AGENTHUB_WORKSPACE_ROOT", filepath.Join(cwd, ".agenthub", "workspaces")),
-		StatePath:               getenv("AGENTHUB_STATE_PATH", filepath.Join(cwd, ".agenthub", "events.ndjson")),
 		AgentPodBaseURLTemplate: getenv("AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE", "http://agent-pod-{workspaceId}:3001"),
 		DevAgentPodToken:        getenv("AGENTHUB_DEV_AGENT_POD_TOKEN", ""),
+		DatabaseURL:             getenv("AGENTHUB_DATABASE_URL", ""),
 	}
 }
 

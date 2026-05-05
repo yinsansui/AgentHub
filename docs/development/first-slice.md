@@ -11,7 +11,7 @@
 7. `internal/runtime/pi`：Pi Agent CLI/JSONL 适配边界；未配置 `PI_AGENT_COMMAND` 时使用 stub 输出。
 8. `pkg/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
 9. `pkg/sse`：SSE 读写工具。
-10. `internal/controlplane/EventStore`：开发期 NDJSON event log，后续替换成 DB-backed event log。
+10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
 
 ## 本地验证
 
@@ -42,10 +42,9 @@ curl -N -X POST http://127.0.0.1:3000/workspaces/ws_dev/turn \
 
 ## 下一步
 
-1. 将 `EventStore` 替换为 DB-backed `session_events + messages projection`。
-2. 将 `PiCLIAdapter` 从 CLI JSONL 接入升级为 Pi Agent SDK/JSON-RPC 接入。
-3. 为 running sink 增加真实 reconnect buffer。
-4. 将 per-pod token 从内存迁移到 DB/runtime 表。
+1. 将 `PiCLIAdapter` 从 CLI JSONL 接入升级为 Pi Agent SDK/JSON-RPC 接入。
+2. 将当前 control-plane session stream 扩展为可观测的 run 状态与取消控制。
+3. 继续扩展 task、repo 与 runtime 表。
 
 
 ## Docker 端到端验证
@@ -54,14 +53,33 @@ curl -N -X POST http://127.0.0.1:3000/workspaces/ws_dev/turn \
 make images
 
 docker network create agenthub || true
-docker run -d --name agenthub-control-plane --network agenthub   -p 3000:3000   -v /var/run/docker.sock:/var/run/docker.sock   -v "$PWD/.agenthub:/data"   agenthub-control-plane:dev
+docker run -d --name agenthub-postgres --network agenthub \
+  -e POSTGRES_USER=agenthub \
+  -e POSTGRES_PASSWORD=agenthub \
+  -e POSTGRES_DB=agenthub \
+  postgres:16-alpine
+docker run -d --name agenthub-control-plane --network agenthub \
+  -p 3000:3000 \
+  -e AGENTHUB_DATABASE_URL=postgres://agenthub:agenthub@agenthub-postgres:5432/agenthub?sslmode=disable \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD/.agenthub:/data" \
+  agenthub-control-plane:dev
 
 curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/start -d '{}'
 curl -N -X POST http://127.0.0.1:3000/workspaces/ws_dev/turn   -H 'content-type: application/json'   -d '{"sessionId":"sess_dev","runId":"run_dev","message":"hello"}'
+
+# 查询当前消息快照
+curl http://127.0.0.1:3000/sessions/sess_dev/messages
+
+# 用全局 event id 补洞 / replay
+curl 'http://127.0.0.1:3000/sessions/sess_dev/events?after=0'
+
+# live reconnect：浏览器 EventSource 会自动带 Last-Event-ID
+curl -N http://127.0.0.1:3000/sessions/sess_dev/stream
 ```
 
 清理：
 
 ```bash
-docker rm -f agenthub-control-plane agent-pod-ws_dev
+docker rm -f agenthub-control-plane agent-pod-ws_dev agenthub-postgres
 ```

@@ -5,31 +5,44 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
-	"time"
 
 	"agenthub/internal/driver"
 	dockerdriver "agenthub/internal/driver/docker"
-	"agenthub/pkg/protocol"
-	"agenthub/pkg/sse"
 )
 
 type Server struct {
 	config Config
 	driver driver.Driver
 	pods   *AgentPodClient
-	store  *EventStore
+	store  EventStore
+	hub    *EventHub
 
 	mu     sync.RWMutex
 	tokens map[string]string
 }
 
 func NewServer(config Config) *Server {
+	driverConfig := driver.Config{
+		DockerSocket:  config.DockerSocket,
+		DockerNetwork: config.DockerNetwork,
+		AgentPodImage: config.AgentPodImage,
+		WorkspaceRoot: config.WorkspaceRoot,
+	}
 	server := &Server{
 		config: config,
-		driver: dockerdriver.NewDockerAgentPodDriver(driver.Config{DockerSocket: config.DockerSocket, DockerNetwork: config.DockerNetwork, AgentPodImage: config.AgentPodImage, WorkspaceRoot: config.WorkspaceRoot}),
+		driver: dockerdriver.NewDockerAgentPodDriver(driverConfig),
 		pods:   NewAgentPodClient(config.AgentPodBaseURLTemplate),
-		store:  NewEventStore(config.StatePath),
+		hub:    NewEventHub(),
 		tokens: map[string]string{},
+	}
+	if config.DatabaseURL == "" {
+		server.store = NewMemoryStore()
+	} else {
+		store, err := NewStore(context.Background(), config.DatabaseURL)
+		if err != nil {
+			panic(err)
+		}
+		server.store = store
 	}
 	return server
 }
@@ -43,10 +56,18 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /workspaces/{workspaceId}/logs", s.handleWorkspaceLogs)
 	mux.HandleFunc("POST /workspaces/{workspaceId}/turn", s.handleTurn)
 	mux.HandleFunc("GET /sessions/{sessionId}/events", s.handleSessionEvents)
+	mux.HandleFunc("GET /sessions/{sessionId}/stream", s.handleSessionStream)
+	mux.HandleFunc("GET /sessions/{sessionId}/messages", s.handleSessionMessages)
 	return mux
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.config.DatabaseURL != "" {
+		if err := s.store.Ping(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -68,7 +89,14 @@ func (s *Server) handleStartWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.setToken(workspaceID, req.Token)
+	if s.config.DatabaseURL != "" {
+		if err := s.store.SaveWorkspaceToken(r.Context(), workspaceID, req.Token); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		s.setToken(workspaceID, req.Token)
+	}
 	writeJSON(w, map[string]any{"pod": info, "tokenStored": true})
 }
 
@@ -102,67 +130,20 @@ func (s *Server) handleWorkspaceLogs(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(logs)
 }
 
-func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
-	var turn protocol.TurnRequest
-	if err := json.NewDecoder(r.Body).Decode(&turn); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	turn.WorkspaceID = workspaceID
-	if turn.SessionID == "" {
-		turn.SessionID = "sess_" + time.Now().UTC().Format("20060102150405.000000000")
-	}
-	if turn.RunID == "" {
-		turn.RunID = "run_" + time.Now().UTC().Format("20060102150405.000000000")
-	}
-	if turn.Source == "" {
-		turn.Source = "api"
-	}
-	if turn.Message == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
-		return
-	}
-	token, ok := s.token(workspaceID)
-	if !ok && s.config.DevAgentPodToken != "" {
-		token = s.config.DevAgentPodToken
-		ok = true
-	}
-	if !ok {
-		http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
-		return
-	}
-	sse.SetHeaders(w)
-	err := s.pods.Turn(r.Context(), workspaceID, token, turn, func(event protocol.UniversalEvent) error {
-		if err := s.store.Append(context.Background(), event); err != nil {
-			return err
-		}
-		return sse.WriteEvent(w, event)
-	})
-	if err != nil {
-		event := protocol.NewEvent(protocol.EventError, turn)
-		event.Error = &protocol.EventErrorPayload{Message: err.Error()}
-		_ = s.store.Append(context.Background(), event)
-		_ = sse.WriteEvent(w, event)
-	}
-}
-
-func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
-	events, err := s.store.ListBySession(r.PathValue("sessionId"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{"events": events})
-}
-
 func (s *Server) setToken(workspaceID, token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tokens[workspaceID] = token
 }
 
-func (s *Server) token(workspaceID string) (string, bool) {
+func (s *Server) workspaceToken(ctx context.Context, workspaceID string) (string, bool) {
+	if s.config.DatabaseURL != "" {
+		token, ok, err := s.store.WorkspaceToken(ctx, workspaceID)
+		if err != nil || !ok {
+			return "", false
+		}
+		return token, true
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	token, ok := s.tokens[workspaceID]

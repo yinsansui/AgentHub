@@ -13,9 +13,18 @@ import (
 )
 
 func WriteEvent(w http.ResponseWriter, event protocol.UniversalEvent) error {
+	return WriteEventWithID(w, 0, event)
+}
+
+func WriteEventWithID(w http.ResponseWriter, id int64, event protocol.UniversalEvent) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
+	}
+	if id > 0 {
+		if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintf(w, "event: %s\n", event.Type); err != nil {
 		return err

@@ -357,7 +357,13 @@ user-portal / admin-console
 3. `runId`
 4. `timestamp`
 
-事件事实进入 append/upsert event log；message/content 是查询或未来 UI projection。
+事件事实进入 PostgreSQL append-only `session_events` event log；`session_events.id` 使用数据库全局递增序列作为跨 session 的 replay cursor。`messages` 保存消息级 projection 元数据，`message_blocks` 保存最终可展示内容块。`item.delta` 只表示实时流式增量，不直接落成 block；`item.completed` 必须携带完整 `item.content`，projection 以该完整内容重建对应 message blocks。
+
+前端读取采用三层合同：
+
+1. `GET /sessions/{sessionId}/messages`：当前可展示消息快照。
+2. `GET /sessions/{sessionId}/events?after=<eventId>`：按 `session_events.id` 补洞 / replay。
+3. `GET /sessions/{sessionId}/stream`：live SSE，服务端写出 SSE `id:`，浏览器重连时用 `Last-Event-ID` 继续。
 
 ---
 
@@ -451,13 +457,12 @@ user-portal / admin-console
 
 以下内容本轮先不展开，但后续需要继续细化：
 
-1. DB-backed `session_events + messages projection` 的最终 schema 和实现
-2. Pi Agent SDK/JSON-RPC 的正式接入方式
-3. running sink 的 reconnect buffer
-4. `TaskContext` 的字段结构
-5. task 与 repo 的持久化关系模型
-6. workspace 的复用、回收和资源限制策略
-7. 多 runtime 协作模型
+1. Pi Agent SDK/JSON-RPC 的正式接入方式
+2. run 状态、取消、超时与观测模型
+3. `TaskContext` 的字段结构
+4. task 与 repo 的持久化关系模型
+5. workspace 的复用、回收和资源限制策略
+6. 多 runtime 协作模型
 
 ---
 

@@ -11,16 +11,34 @@ control-plane
   -> AgentPodServer
   -> PiAgentCoreAdapter boundary
   -> UniversalEvent SSE
-  -> file-backed event log for development
+  -> PostgreSQL-backed session_events event log with global event ids
+  -> messages + message_blocks projection for session reads
 ```
 
-The durable event store is currently an append-only NDJSON development implementation. It is intentionally behind `EventStore` so it can be replaced by the agreed DB-backed event log.
+The durable control-plane store uses PostgreSQL when `AGENTHUB_DATABASE_URL` is configured. Runtime events are appended to `session_events` with a global `BIGSERIAL` cursor, message metadata is projected into `messages`, and completed item content is expanded into `message_blocks` for lightweight blocks-first session reads. Streaming `item.delta` events stay in the event log and are not treated as final blocks. If no database URL is configured, the server falls back to an in-memory development store only.
+
+Session reads follow a snapshot + replay + live pattern:
+
+```text
+GET /sessions/{sessionId}/messages        # current message snapshot
+GET /sessions/{sessionId}/events?after=id # durable replay / gap fill
+GET /sessions/{sessionId}/stream          # live SSE; supports Last-Event-ID
+```
+
+`/events` returns stored event envelopes (`id`, `type`, `payload`, `createdAt`), and `/stream` writes the same `id` as the SSE `id:` field.
 
 ## Verify
 
 ```bash
 go test ./...
 make images
+```
+
+For durable local runs, point the control-plane at PostgreSQL:
+
+```bash
+export AGENTHUB_DATABASE_URL=postgres://agenthub:agenthub@127.0.0.1:5432/agenthub?sslmode=disable
+go run ./cmd/control-plane
 ```
 
 ## Layout
