@@ -616,6 +616,7 @@ Skill 和 MCP 是两种不同扩展面：
 8. AgentPodServer 内部接口使用 per-pod bearer token。
 9. 事件流采用 `UniversalEvent`。
 10. 第一阶段先完成通用 MCP / skill 加载机制和通用 TS runtime-host，不先抽象完整 plugin 体系。
+11. 真实 runtime 主链路以 `scripts/smoke/real-runtime-golden-path.sh` 为验收入口，覆盖 PostgreSQL、LLM connection、skill / MCP 物理化、real LLM turn、event replay 与 message projection。
 
 ---
 

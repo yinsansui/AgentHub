@@ -1,4 +1,4 @@
-.PHONY: fmt check build-control-plane build-agent-pod build-ts-runtime-host build-linux-bins image-agent-pod image-control-plane images
+.PHONY: fmt check build-control-plane build-agent-pod build-ts-runtime-host build-linux-bins image-agent-pod image-control-plane images smoke-real-runtime
 
 fmt:
 	gofmt -w cmd internal pkg
@@ -28,3 +28,6 @@ image-control-plane: build-linux-bins
 	docker build -f deploy/Dockerfile.control-plane -t agenthub-control-plane:dev .
 
 images: image-agent-pod image-control-plane
+
+smoke-real-runtime:
+	./scripts/smoke/real-runtime-golden-path.sh

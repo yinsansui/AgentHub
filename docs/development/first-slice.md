@@ -21,6 +21,41 @@ cd runtimes/ts-runtime-host && npm ci && npm run build
 make images
 ```
 
+## Real Runtime Golden Path
+
+真实 runtime 主链路用 `scripts/smoke/real-runtime-golden-path.sh` 验收。它默认启动临时 PostgreSQL container，并用本地进程启动 control-plane 与 AgentPod：
+
+```bash
+export AGENTHUB_SMOKE_LLM_BASE_URL=http://example.local:8084
+export AGENTHUB_SMOKE_LLM_API_KEY=...
+export AGENTHUB_SMOKE_LLM_MODEL_ID=k2p5
+make smoke-real-runtime
+```
+
+脚本覆盖以下合同：
+
+1. PostgreSQL-backed control-plane 可启动并通过 `/health`。
+2. workspace skill 可通过 API 写入，并在新 session cwd 下物理化到 `.agents/skills/<slug>/` 和 `.claude/skills/<slug>/`。
+3. workspace MCP server 可通过 API 写入，并在新 session cwd 下物理化到 `.agents/mcp.json`。
+4. workspace LLM connection 与 enabled model 可通过 control-plane API 配置。
+5. `POST /workspaces/{workspaceId}/sessions` 创建 task + session + first turn，并锁定 `session.modelId`。
+6. AgentPod 启动 `ts-runtime-host` / `pi-coding-agent`，使用 control-plane 注入的 LLM env 调真实模型。
+7. run 完成后，`GET /sessions/{sessionId}/state` 没有 active run，`latestEventId` 前进。
+8. `GET /sessions/{sessionId}/events?after=0` 可 replay，并包含 `item.completed`。
+9. `GET /sessions/{sessionId}/messages` 可读取 message projection，并包含 smoke marker。
+
+常用参数：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AGENTHUB_SMOKE_LLM_BASE_URL` | 无 | 必填，Anthropic-compatible endpoint |
+| `AGENTHUB_SMOKE_LLM_API_KEY` | 无 | 必填，LLM API key |
+| `AGENTHUB_SMOKE_LLM_MODEL_ID` | `k2p5` | 创建 session 时锁定的 model |
+| `AGENTHUB_SMOKE_REFRESH_MODELS` | `1` | 是否先调用 `/llm-models:refresh` |
+| `AGENTHUB_SMOKE_DATABASE_URL` | 无 | 指定后复用已有 Postgres，不启动临时 container |
+| `AGENTHUB_SMOKE_KEEP_ARTIFACTS` | `0` | 失败时总是保留日志；成功时设为 `1` 可保留 `.agenthub/smoke/<run>` |
+| `AGENTHUB_SMOKE_SKIP_BUILD` | `0` | 设为 `1` 时跳过 `ts-runtime-host` build |
+
 如果 control-plane 运行在宿主机而不是 Docker network 内，默认的 `http://agent-pod-{workspaceId}:3001` 不能被宿主机 DNS 解析。此时可以先用本地 agent-pod 进程验证 SSE 链路：
 
 ```bash
