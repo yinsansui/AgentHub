@@ -3,7 +3,7 @@ COPY .agenthub/bin/control-plane /control-plane
 ENV AGENTHUB_CONTROL_PLANE_ADDR=:3000 \
     AGENTHUB_DOCKER_SOCKET=/var/run/docker.sock \
     AGENTHUB_DOCKER_NETWORK=agenthub \
-    AGENTHUB_AGENT_POD_IMAGE=agenthub-pi-agent-pod:dev \
+    AGENTHUB_AGENT_POD_IMAGE=agenthub-agent-pod:dev \
     AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE=http://agent-pod-{workspaceId}:3001 \
     AGENTHUB_WORKSPACE_ROOT=/data/workspaces
 EXPOSE 3000

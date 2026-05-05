@@ -1,3 +1,12 @@
 **
+!.agenthub/
+!.agenthub/bin/
 !.agenthub/bin/agent-pod
 !.agenthub/bin/control-plane
+!runtimes/
+!runtimes/ts-runtime-host/
+!runtimes/ts-runtime-host/package.json
+!runtimes/ts-runtime-host/package-lock.json
+!runtimes/ts-runtime-host/tsconfig.json
+!runtimes/ts-runtime-host/src/
+!runtimes/ts-runtime-host/src/**

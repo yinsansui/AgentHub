@@ -136,7 +136,7 @@ func createContainerBody(spec driver.AgentPodSpec, name string) map[string]any {
 		"Image": spec.Image,
 		"Env": []string{
 			"WORKSPACE_ID=" + spec.WorkspaceID,
-			"RUNTIME_ID=pi-agent",
+			"RUNTIME_ID=pi-coding-agent",
 			"CONTROL_PLANE_URL=http://agenthub-control-plane:3000",
 			"AGENTHUB_INTERNAL_TOKEN=" + spec.Token,
 			"WORKSPACE_DIR=/workspace",

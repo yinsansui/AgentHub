@@ -23,7 +23,7 @@ func LoadConfig() Config {
 		Addr:                    getenv("AGENTHUB_CONTROL_PLANE_ADDR", ":3000"),
 		DockerSocket:            getenv("AGENTHUB_DOCKER_SOCKET", "/var/run/docker.sock"),
 		DockerNetwork:           getenv("AGENTHUB_DOCKER_NETWORK", "agenthub"),
-		AgentPodImage:           getenv("AGENTHUB_AGENT_POD_IMAGE", "agenthub-pi-agent-pod:dev"),
+		AgentPodImage:           getenv("AGENTHUB_AGENT_POD_IMAGE", "agenthub-agent-pod:dev"),
 		WorkspaceRoot:           getenv("AGENTHUB_WORKSPACE_ROOT", filepath.Join(cwd, ".agenthub", "workspaces")),
 		AgentPodBaseURLTemplate: getenv("AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE", "http://agent-pod-{workspaceId}:3001"),
 		DevAgentPodToken:        getenv("AGENTHUB_DEV_AGENT_POD_TOKEN", ""),

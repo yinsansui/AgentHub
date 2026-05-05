@@ -2,3 +2,7 @@
 .idea/
 .agenthub/
 *.log
+
+# TypeScript runtime host build artifacts
+runtimes/ts-runtime-host/node_modules/
+runtimes/ts-runtime-host/dist/

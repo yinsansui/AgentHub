@@ -1,6 +1,6 @@
 # AgentHub
 
-AgentHub is an agent runtime control-plane prototype. The first development slice focuses on a Docker-backed `agent-pod` abstraction and a Pi Agent adapter boundary.
+AgentHub is an agent runtime control-plane prototype. The first development slice focuses on a Docker-backed `agent-pod` abstraction and a process-backed runtime boundary.
 
 ## Current slice
 
@@ -9,7 +9,8 @@ control-plane
   -> DockerAgentPodDriver
   -> agent-pod container
   -> AgentPodServer
-  -> PiAgentCoreAdapter boundary
+  -> TS runtime host process
+  -> pi-coding-agent adapter boundary
   -> UniversalEvent SSE
   -> PostgreSQL-backed session_events event log with global event ids
   -> messages + message_blocks projection for session reads
@@ -37,6 +38,7 @@ POST /sessions/{sessionId}/interrupt      # Stop current response with expectedR
 
 ```bash
 go test ./...
+cd runtimes/ts-runtime-host && npm ci && npm run build
 make images
 ```
 
@@ -45,6 +47,18 @@ For durable local runs, point the control-plane at PostgreSQL:
 ```bash
 export AGENTHUB_DATABASE_URL=postgres://agenthub:agenthub@127.0.0.1:5432/agenthub?sslmode=disable
 go run ./cmd/control-plane
+```
+
+To run the AgentPod against an Anthropic-compatible endpoint through the TS runtime host, configure the runtime by environment variables. Secrets must stay in the process environment and must not be committed:
+
+```bash
+export AGENTHUB_RUNTIME_COMMAND="node $(pwd)/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent"
+export AGENTHUB_PI_PROVIDER=anthropic
+export AGENTHUB_PI_API=anthropic-messages
+export AGENTHUB_PI_BASE_URL=http://example.local:8084
+export AGENTHUB_PI_MODEL=k2p5
+export AGENTHUB_PI_API_KEY=...
+go run ./cmd/agent-pod
 ```
 
 ## Layout
@@ -57,7 +71,8 @@ internal/agentpod       # agent-pod core
 internal/driver         # replaceable container driver interface
 internal/driver/docker  # Docker Engine API implementation
 internal/runtime        # replaceable AI runtime interface
-internal/runtime/pi     # Pi CLI adapter boundary
+internal/runtime/process # process-backed runtime host adapter
+runtimes/ts-runtime-host # TypeScript runtime host; first adapter uses pi-coding-agent npm package
 pkg/protocol            # reusable UniversalEvent / TurnRequest contracts
 pkg/sse                 # reusable SSE transport helpers
 web/admin-console       # future frontend

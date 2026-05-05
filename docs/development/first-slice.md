@@ -8,7 +8,7 @@
 4. `internal/controlplane/AgentPodClient`：通过 Docker network + container name 调用 pod 内部 `/turn`。
 5. `cmd/agent-pod`：agent-pod 可执行入口，只做 wire-up。
 6. `internal/agentpod`：容器内 AgentPodServer。
-7. `internal/runtime/pi`：Pi Agent CLI/JSONL 适配边界；未配置 `PI_AGENT_COMMAND` 时使用 stub 输出。
+7. `internal/runtime/process` + `runtimes/ts-runtime-host`：通用进程型 runtime-host；首个 adapter 通过 npm package `@mariozechner/pi-coding-agent` 接入真实 pi-coding-agent runtime。旧的 Go 侧 CLI/JSONL fallback 已删除。
 8. `pkg/protocol`：AgentHub `UniversalEvent` 与 `TurnRequest`。
 9. `pkg/sse`：SSE 读写工具。
 10. `internal/controlplane/EventStore`：PostgreSQL-backed `session_events` event log + `messages` / `message_blocks` blocks-first projection + `tasks` / `sessions` / `session_runs` run lifecycle；`session_events.id` 是全局递增 replay cursor，`item.completed.item.content` 是最终 blocks 来源，未配置数据库时仅使用内存开发 store。
@@ -17,6 +17,7 @@
 
 ```bash
 go test ./...
+cd runtimes/ts-runtime-host && npm ci && npm run build
 make images
 ```
 
@@ -24,6 +25,22 @@ make images
 
 ```bash
 AGENTHUB_INTERNAL_TOKEN=dev-token WORKSPACE_ID=ws_dev go run ./cmd/agent-pod
+```
+
+对接 Anthropic-compatible 真实模型时，先构建 TS runtime host，然后通过环境变量注入 endpoint、model 和 key：
+
+```bash
+cd runtimes/ts-runtime-host && npm ci && npm run build && cd ../..
+
+AGENTHUB_RUNTIME_COMMAND="node $(pwd)/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent" \
+AGENTHUB_PI_PROVIDER=anthropic \
+AGENTHUB_PI_API=anthropic-messages \
+AGENTHUB_PI_BASE_URL=http://example.local:8084 \
+AGENTHUB_PI_MODEL=k2p5 \
+AGENTHUB_PI_API_KEY=... \
+AGENTHUB_INTERNAL_TOKEN=dev-token \
+WORKSPACE_ID=ws_dev \
+go run ./cmd/agent-pod
 ```
 
 另一个终端：
@@ -38,11 +55,11 @@ curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
   -d '{"firstTurn":{"message":"hello"}}'
 ```
 
-真正使用 Docker container 时，control-plane 应与 agent-pod 在同一个 Docker network 中。当前 Dockerfile 使用本机交叉编译出的静态 Go binary + `scratch` 镜像，避免首轮开发依赖 Docker Hub base image 拉取。
+真正使用 Docker container 时，control-plane 应与 agent-pod 在同一个 Docker network 中。当前 agent-pod 镜像基于 `node:22-slim`，同时包含静态 Go `agent-pod` binary 和构建后的 `ts-runtime-host`。
 
 ## 下一步
 
-1. 将 `PiCLIAdapter` 从 CLI JSONL 接入升级为 Pi Agent SDK/JSON-RPC 接入。
+1. 将 `.agents/mcp.json` 注册为真实 runtime tool。
 2. 为 run lifecycle 增加超时、重试与更完整的观测指标。
 3. 将 repo 绑定沉到插件扩展点，避免进入平台核心模型。
 

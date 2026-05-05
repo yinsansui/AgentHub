@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"agenthub/internal/runtime"
-	piagent "agenthub/internal/runtime/pi"
+	processruntime "agenthub/internal/runtime/process"
 	"agenthub/pkg/protocol"
 	"agenthub/pkg/sse"
 )
@@ -37,13 +37,17 @@ func NewServer(workspaceID, runtimeID, token string, adapter runtime.Runtime) *S
 
 func NewServerFromEnv() *Server {
 	workspaceID := env("WORKSPACE_ID", "local")
-	runtimeID := env("RUNTIME_ID", "pi-agent")
+	runtimeID := env("RUNTIME_ID", "pi-coding-agent")
 	token := os.Getenv("AGENTHUB_INTERNAL_TOKEN")
 	workspaceDir := env("WORKSPACE_DIR", "/workspace")
-	adapter := runtime.Runtime(piagent.PiCLIAdapter{Command: os.Getenv("PI_AGENT_COMMAND"), WorkDir: workspaceDir})
+	adapter := runtimeFromEnv(workspaceDir)
 	server := NewServer(workspaceID, runtimeID, token, adapter)
 	server.workspaceDir = workspaceDir
 	return server
+}
+
+func runtimeFromEnv(workspaceDir string) runtime.Runtime {
+	return processruntime.NewAdapter(os.Getenv("AGENTHUB_RUNTIME_COMMAND"), workspaceDir)
 }
 
 func (s *Server) Routes() http.Handler {

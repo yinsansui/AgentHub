@@ -18,7 +18,7 @@ AgentHub 是一个用于承载和调度多种 Agent Runtime 的平台。
 2. 提供统一的控制面来管理 task、workspace 和 runtime
 3. 通过 Docker 容器提供长期存在的 workspace
 4. 以 `agent-pod` 抽象承载封装后的 agent runtime
-5. 第一阶段先通过 Docker container 接入 Pi Agent
+5. 第一阶段先通过 Docker container 接入 ts-runtime-host / pi-coding-agent
 6. 统一接收并持久化 `UniversalEvent` 事件流
 
 ---
@@ -48,8 +48,10 @@ internal/                    # 不对外暴露的业务逻辑
       driver.go
   runtime/                   # AI 运行时适配，可替换
     runtime.go               # interface Runtime
-    pi/                      # Pi CLI / SDK 实现
-      adapter.go
+    process/                 # 通用进程型 runtime-host adapter
+
+runtimes/                    # 非 Go runtime host
+  ts-runtime-host/           # TypeScript runtime host，首个 adapter 为 pi-coding-agent
 
 pkg/                         # 可对外复用的纯工具包
   protocol/                  # 事件协议定义
@@ -78,7 +80,7 @@ docs/
 2. `internal/controlplane` 放控制面业务核心，包括 workspace 生命周期、session/turn 处理、AgentPod client、事件持久化。
 3. `internal/agentpod` 放容器内本地控制层，包括 HTTP 路由、session prepare、turn runner、cancel、shutdown。
 4. `internal/driver` 定义容器驱动接口；`internal/driver/docker` 是 Docker 实现。未来 K8s/VM/local process 只能新增 driver，不应污染 control-plane 主逻辑。
-5. `internal/runtime` 定义 AI runtime 接口；`internal/runtime/pi` 是 Pi Agent 适配。未来 Codex/Claude 只能新增 runtime adapter，不应改 AgentPodServer 主合同。
+5. `internal/runtime` 定义 AI runtime 接口；`internal/runtime/process` 是唯一的 Go 侧 runtime-host adapter。未来 Codex/Claude 等 TS runtime 应优先接入 `runtimes/ts-runtime-host` adapter，不应改 AgentPodServer 主合同。
 6. `pkg/*` 只放可对外复用的纯合同或通用工具。当前只允许 `protocol` 和 `sse`，避免把业务代码放进 pkg。
 7. `web/*` 只放前端；当前可以为空目录。
 8. `deploy/*` 放 Dockerfile、compose、部署脚本等环境相关文件。
@@ -151,17 +153,20 @@ user-portal / admin-console
    AgentPodServer / Supervisor
           |
           v
-   PiAgentCoreAdapter
+   internal/runtime/process
           |
           v
-       pi-agent
+   ts-runtime-host
+          |
+          v
+   pi-coding-agent adapter
 ```
 
 说明：
 
 1. `agent-pod` 是平台抽象，不等同于 Kubernetes Pod。
 2. 第一阶段实现形态是 Docker container，后续可替换为 K8s/VM/local process driver。
-3. 容器内 `AgentPodServer / Supervisor` 是本地控制进程，用于衔接 `control-plane` 和 `PiAgentCoreAdapter`。
+3. 容器内 `AgentPodServer / Supervisor` 是本地控制进程，用于衔接 `control-plane` 和 `ts-runtime-host`。
 4. 第一阶段 `1 workspace = 1 agent-pod`，一个 workspace 可有多个 session，但 turn 先串行。
 
 ---
@@ -223,8 +228,8 @@ user-portal / admin-console
 
 1. 提供 `/health`、`/info`、`/sessions/:sessionId/prepare`、`/turn`、`/sessions/:sessionId/reconnect`、`/sessions/:sessionId/cancel`、`/shutdown`。
 2. 初始化 workspace/task/session 目录。
-3. 管理 Pi Agent Core 的执行和中断。
-4. 将 Pi Agent 原始事件映射为 AgentHub `UniversalEvent`。
+3. 管理下游 agent runtime 进程的执行和中断。
+4. 将 runtime-host 输出的事件转发为 AgentHub `UniversalEvent`。
 5. 做基础健康检查。
 
 之所以需要这一层，是为了避免 `control-plane` 直接通过容器命令去硬控底层 runtime 进程，降低耦合并统一容器内控制逻辑。
@@ -235,14 +240,12 @@ user-portal / admin-console
 
 `runtime adapter` 是 AgentHub 针对不同 agent-core 的适配实现。
 
-第一阶段只实现：
+第一阶段实现：
 
-- `PiAgentCoreAdapter`
+- 通用 `process` runtime adapter：Go 侧只管理进程生命周期和 AgentHub runtime-host 协议。
+- `ts-runtime-host` 的 `pi-coding-agent` adapter：通过发布后的 npm package `@mariozechner/pi-coding-agent` 接入真实 pi-coding-agent runtime。
 
-未来再考虑：
-
-- Codex adapter
-- Claude adapter
+未来 Codex、Claude 等 TS runtime 优先作为 `ts-runtime-host` adapter 扩展，而不是各自复制一套 bridge。
 
 它的职责不是单纯做协议转发，而是统一承担：
 
@@ -260,9 +263,9 @@ user-portal / admin-console
 
 - Codex
 - Claude Agent SDK
-- pi-agent
+- pi-coding-agent
 
-这一层不直接暴露给 `control-plane`，而是由 `PiAgentCoreAdapter` / runtime adapter 封装接入。
+这一层不直接暴露给 `control-plane`，而是由 runtime adapter 封装接入。
 
 ---
 
@@ -378,7 +381,38 @@ DELETE /workspaces/{workspaceId}/mcp-servers/{name}
 
 已有 session 的 skill 文件和 MCP 配置不再随 `skill_definitions` / `skill_files` / `mcp_server_definitions` / `mcp_server_env` 后续修改而变化；如果需要新版配置，需要创建新的 session。
 
-### 8.3 短生命周期：Run Invocation Context
+
+### 8.3 Runtime Host 与 pi-coding-agent 接入
+
+AgentHub 对 TS agent runtime 采用通用 runtime-host 进程边界：
+
+```text
+Go AgentPodServer
+  -> internal/runtime/process
+  -> runtimes/ts-runtime-host
+      -> adapters/pi-coding-agent
+      -> @mariozechner/pi-coding-agent
+```
+
+约束：
+
+1. AgentHub 只依赖发布后的 `@mariozechner/pi-coding-agent` npm package。
+2. 本地开发、Docker 和 CI 都不得通过 `file:`、`npm link`、源码 copy 或本机绝对路径引用 `pi-mono`。
+3. `ts-runtime-host` stdout 只输出 AgentHub `UniversalEvent` JSONL；日志只能写 stderr。
+4. pi-coding-agent 创建 session 时显式加载当前 session cwd 下的 `.agents/skills`。
+5. `.agents/mcp.json` 本阶段只负责物理化，不保证被 pi-coding-agent 消费。
+
+runtime-host 支持用环境变量选择 Anthropic-compatible 模型端点：
+
+| 变量 | 含义 |
+| --- | --- |
+| `AGENTHUB_PI_PROVIDER` | provider 名称，默认 `anthropic` |
+| `AGENTHUB_PI_API` | pi API 类型，Anthropic 协议使用 `anthropic-messages` |
+| `AGENTHUB_PI_BASE_URL` / `ANTHROPIC_BASE_URL` | 模型服务 base URL |
+| `AGENTHUB_PI_MODEL` / `ANTHROPIC_MODEL` | 模型 ID |
+| `AGENTHUB_PI_API_KEY` / `ANTHROPIC_API_KEY` | 运行时 API key，只放环境变量，不落库、不写仓库 |
+
+### 8.4 短生命周期：Run Invocation Context
 
 每次 run 只携带最小执行身份和用户输入：
 
@@ -392,7 +426,7 @@ DELETE /workspaces/{workspaceId}/mcp-servers/{name}
 
 run 启动前只需要确认对应 session cwd 已准备完成，并把 Agent Core cwd 设为 `/workspace/tasks/<taskId>/sessions/<sessionId>`；不应在 run 级别重复构建完整 RuntimeBundle。
 
-### 8.4 Skill 与 MCP 的边界
+### 8.5 Skill 与 MCP 的边界
 
 Skill 和 MCP 是两种不同扩展面：
 
@@ -451,7 +485,7 @@ Skill 和 MCP 是两种不同扩展面：
 5. `session.ended`
 6. `error`
 
-这些事件由 `PiAgentCoreAdapter` 输出，`AgentPodServer` 负责以 SSE 转发，`control-plane` 负责 intercept、持久化和回放。
+这些事件由 runtime-host adapter 输出，`AgentPodServer` 负责以 SSE 转发，`control-plane` 负责 intercept、持久化和回放。
 
 每条事件至少保留以下基础字段：
 
@@ -476,16 +510,16 @@ Skill 和 MCP 是两种不同扩展面：
 
 ## 11. `AgentPodServer / Supervisor` 是否必须存在
 
-当前判断：必须存在，但第一阶段可以把本地控制层和 Pi adapter 合并在同一个二进制内。
+当前判断：必须存在，但第一阶段可以把本地控制层和 runtime-host 进程管理收口在 agent-pod 内。
 
 原因：
 
 1. `control-plane` 不适合直接深入容器内部管理底层 runtime 进程。
 2. task/workspace 目录初始化逻辑天然属于容器本地。
-3. Pi Agent Core 的执行和中断更适合由本地进程控制。
+3. runtime-host 的执行和中断更适合由容器本地进程控制。
 4. 中断、健康检查和事件桥接也更适合在容器内收口。
 
-第一阶段实现为 `cmd/agent-pod` 单进程入口 + `internal/agentpod` 核心；后续如果 Pi Agent SDK/JSON-RPC 接入复杂度上升，再拆成 Supervisor + adapter 进程。
+第一阶段实现为 `cmd/agent-pod` 单进程入口 + `internal/agentpod` 核心，通过 `internal/runtime/process` 管理 `ts-runtime-host` 子进程；后续如果多 runtime 生命周期复杂度上升，再拆成 Supervisor + adapter 进程。
 
 ---
 
@@ -538,7 +572,7 @@ Skill 和 MCP 是两种不同扩展面：
 原因：
 
 1. 更适合做协议转换和事件流映射
-2. 更容易对接 Pi Agent、Codex、Claude Agent SDK 等生态
+2. 更容易对接 pi-coding-agent、Codex、Claude Agent SDK 等 TS 生态
 3. 流式 JSON 和消息处理实现成本更低
 
 ---
@@ -547,16 +581,16 @@ Skill 和 MCP 是两种不同扩展面：
 
 当前已确认的第一版约束如下：
 
-1. 第一阶段先对接 Pi Agent。
+1. 第一阶段先通过 `ts-runtime-host` 对接 pi-coding-agent。
 2. `agent-pod` 是平台抽象，不绑定 Kubernetes。
 3. 当前 driver 使用 Docker API。
 4. control-plane 通过 Docker network + container name 访问 agent-pod。
 5. workspace 文件通过 host path bind mount 挂载到 `/workspace`。
-6. 镜像先使用 `agenthub-pi-agent-pod:dev`。
+6. 镜像先使用 `agenthub-agent-pod:dev`。
 7. `1 workspace = 1 agent-pod`，turn 先串行。
 8. AgentPodServer 内部接口使用 per-pod bearer token。
 9. 事件流采用 `UniversalEvent`。
-10. 第一阶段先完成通用 MCP / skill 加载机制，不先抽象完整 plugin 体系。
+10. 第一阶段先完成通用 MCP / skill 加载机制和通用 TS runtime-host，不先抽象完整 plugin 体系。
 
 ---
 
@@ -564,7 +598,7 @@ Skill 和 MCP 是两种不同扩展面：
 
 以下内容本轮先不展开，但后续需要继续细化：
 
-1. Pi Agent SDK/JSON-RPC 的正式接入方式
+1. MCP 配置如何注册为真实 runtime tool
 2. run 超时、重试与更完整观测模型
 3. repo plugin：基于通用 MCP / skill 机制之后再实现，能力包括 repo catalog、UI 可选仓库列表、clone 状态记录、`repo.clone` MCP tool、repo knowledge skill、以及 clone 到 task `repos/` 目录
 4. task 目录结构与 workspace 复用策略
