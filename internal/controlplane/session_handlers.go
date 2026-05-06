@@ -574,3 +574,21 @@ func normalizeEventLimit(limit int) int {
 	}
 	return limit
 }
+
+func (s *Server) handleListWorkspaceSessions(w http.ResponseWriter, r *http.Request) {
+	workspaceID := r.PathValue("workspaceId")
+	limit, _ := parseIntQuery(r, "limit", 20)
+	offset, _ := parseIntQuery(r, "offset", 0)
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	sessions, err := s.store.ListWorkspaceSessions(r.Context(), workspaceID, limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sessions == nil {
+		sessions = []SessionProjection{}
+	}
+	writeJSON(w, map[string]any{"sessions": sessions, "limit": limit, "offset": offset})
+}

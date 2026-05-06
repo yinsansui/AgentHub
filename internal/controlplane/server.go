@@ -67,6 +67,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /workspaces/{workspaceId}/mcp-servers/{name}", s.handlePutWorkspaceMCPServer)
 	mux.HandleFunc("GET /workspaces/{workspaceId}/mcp-servers/{name}", s.handleGetWorkspaceMCPServer)
 	mux.HandleFunc("DELETE /workspaces/{workspaceId}/mcp-servers/{name}", s.handleDeleteWorkspaceMCPServer)
+	mux.HandleFunc("GET /workspaces/{workspaceId}/sessions", s.handleListWorkspaceSessions)
 	mux.HandleFunc("POST /workspaces/{workspaceId}/sessions", s.handleCreateWorkspaceSession)
 	mux.HandleFunc("POST /sessions/{sessionId}/turns", s.handleCreateSessionTurn)
 	mux.HandleFunc("GET /sessions/{sessionId}/events", s.handleSessionEvents)

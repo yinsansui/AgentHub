@@ -35,6 +35,7 @@ type EventStore interface {
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
+	ListWorkspaceSessions(ctx context.Context, workspaceID string, limit, offset int) ([]SessionProjection, error)
 	GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error)
 	UpsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error)
 	ListWorkspaceLLMModels(ctx context.Context, workspaceID string) ([]LLMConnectionModel, error)
@@ -443,6 +444,10 @@ func (s *Store) CreateSession(ctx context.Context, workspaceID, taskID, sessionI
 
 func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error) {
 	return s.getSession(ctx, sessionID)
+}
+
+func (s *Store) ListWorkspaceSessions(ctx context.Context, workspaceID string, limit, offset int) ([]SessionProjection, error) {
+	return s.listWorkspaceSessions(ctx, workspaceID, limit, offset)
 }
 
 func (s *Store) GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {

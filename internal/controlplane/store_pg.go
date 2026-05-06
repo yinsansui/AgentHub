@@ -213,6 +213,33 @@ WHERE id = $1
 	return session, true, nil
 }
 
+func (s *Store) listWorkspaceSessions(ctx context.Context, workspaceID string, limit, offset int) ([]SessionProjection, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, task_id, workspace_id, model_id, COALESCE(title, ''), metadata, created_at, updated_at
+FROM sessions
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`, workspaceID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []SessionProjection
+	for rows.Next() {
+		var session SessionProjection
+		var metadata []byte
+		if err := rows.Scan(&session.SessionID, &session.TaskID, &session.WorkspaceID, &session.ModelID, &session.Title, &metadata, &session.CreatedAt, &session.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if len(metadata) > 0 {
+			_ = json.Unmarshal(metadata, &session.Metadata)
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
 func (s *Store) getWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
 	var connection LLMConnection
 	err := s.pool.QueryRow(ctx, `

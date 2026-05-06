@@ -97,6 +97,26 @@ func (s *MemoryStore) GetSession(ctx context.Context, sessionID string) (Session
 	return session, true, nil
 }
 
+func (s *MemoryStore) ListWorkspaceSessions(ctx context.Context, workspaceID string, limit, offset int) ([]SessionProjection, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var all []SessionProjection
+	for _, session := range s.sessions {
+		if session.WorkspaceID == workspaceID {
+			all = append(all, session)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	if offset >= len(all) {
+		return []SessionProjection{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
 func (s *MemoryStore) GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
