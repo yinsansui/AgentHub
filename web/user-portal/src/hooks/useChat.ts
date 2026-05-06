@@ -134,6 +134,7 @@ export function useChat(
 
   async function handleCreateOrTurn(event: FormEvent) {
     event.preventDefault();
+    if (!workspaceId) return;
     const message = messageDraft.trim();
     if (!message || workbench.activeRun) return;
     try {

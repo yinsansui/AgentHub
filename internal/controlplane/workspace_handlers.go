@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,11 @@ type upsertWorkspaceRequest struct {
 	Description string         `json:"description,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
+
+const (
+	defaultWorkspaceID   = "ws_dev"
+	defaultWorkspaceName = "Default 工作空间"
+)
 
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	limit, _ := parseIntQuery(r, "limit", 100)
@@ -29,10 +35,41 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if offset == 0 && len(workspaces) == 0 {
+		workspace, err := s.ensureDefaultWorkspace(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		workspaces = []WorkspaceProjection{workspace}
+	}
 	if workspaces == nil {
 		workspaces = []WorkspaceProjection{}
 	}
 	writeJSON(w, map[string]any{"workspaces": workspaces, "limit": limit, "offset": offset})
+}
+
+func (s *Server) ensureDefaultWorkspace(ctx context.Context) (WorkspaceProjection, error) {
+	workspace := WorkspaceProjection{
+		WorkspaceID: defaultWorkspaceID,
+		Name:        defaultWorkspaceName,
+		Metadata:    map[string]any{},
+	}
+	saved, err := s.store.CreateWorkspace(ctx, workspace)
+	if err == nil {
+		return saved, nil
+	}
+	if !errors.Is(err, ErrWorkspaceExists) {
+		return WorkspaceProjection{}, err
+	}
+	existing, ok, err := s.store.GetWorkspace(ctx, defaultWorkspaceID)
+	if err != nil {
+		return WorkspaceProjection{}, err
+	}
+	if !ok {
+		return WorkspaceProjection{}, ErrWorkspaceExists
+	}
+	return existing, nil
 }
 
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {

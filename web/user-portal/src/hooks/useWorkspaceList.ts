@@ -5,6 +5,7 @@ import type { WorkspaceProjection } from "../types";
 export function useWorkspaceList() {
   const [workspaces, setWorkspaces] = useState<WorkspaceProjection[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
 
@@ -16,6 +17,7 @@ export function useWorkspaceList() {
     try {
       const result = await listWorkspaces(100, 0);
       setWorkspaces(result.workspaces);
+      setLoaded(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载 workspace 列表失败");
     } finally {
@@ -24,5 +26,5 @@ export function useWorkspaceList() {
     }
   }, []);
 
-  return { workspaces, loading, error, loadWorkspaces };
+  return { workspaces, loading, loaded, error, loadWorkspaces };
 }

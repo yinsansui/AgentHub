@@ -10,6 +10,7 @@ type Props = {
   onWorkspaceSubmit: (e: FormEvent) => void;
   workspaces: WorkspaceProjection[];
   workspacesLoading: boolean;
+  workspacesLoaded: boolean;
   onLoadWorkspaces: () => void;
   onSelectWorkspace: (id: string) => void;
   sessionList: SessionProjection[];
@@ -25,7 +26,7 @@ type Props = {
 
 export function SessionSidebar({
   workspaceId, workspaceDraft, setWorkspaceDraft, onWorkspaceSubmit,
-  workspaces, workspacesLoading, onLoadWorkspaces, onSelectWorkspace,
+  workspaces, workspacesLoading, workspacesLoaded, onLoadWorkspaces, onSelectWorkspace,
   sessionList, sessionListHasMore, sessionListLoading, sessionListError,
   activeSessionId, onLoadSession, onLoadMore, onNewSession, onOpenSettings
 }: Props) {
@@ -45,10 +46,10 @@ export function SessionSidebar({
   }, [workspaceMenuOpen]);
 
   useEffect(() => {
-    if (workspaceMenuOpen && workspaces.length === 0 && !workspacesLoading) {
+    if (workspaceMenuOpen && !workspacesLoaded && !workspacesLoading) {
       onLoadWorkspaces();
     }
-  }, [workspaceMenuOpen, workspaces.length, workspacesLoading, onLoadWorkspaces]);
+  }, [workspaceMenuOpen, workspacesLoaded, workspacesLoading, onLoadWorkspaces]);
 
   return (
     <>
@@ -113,7 +114,7 @@ export function SessionSidebar({
             onClick={() => setWorkspaceMenuOpen((v) => !v)}
           >
             <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{workspaceId.charAt(0).toUpperCase()}</span>
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap flex-1 text-left">{workspaceId}</span>
+            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap flex-1 text-left">{workspaces.find((ws) => ws.workspaceId === workspaceId)?.name || workspaceId}</span>
             <ChevronDown size={14} className={`flex-shrink-0 transition-transform duration-150 ${workspaceMenuOpen ? "rotate-180" : ""}`} />
           </button>
           {workspaceMenuOpen && (
@@ -121,20 +122,20 @@ export function SessionSidebar({
               {workspacesLoading && workspaces.length === 0 && (
                 <div className="py-3 text-center text-apple-fg-50 text-[13px]">加载中…</div>
               )}
-              {workspaces.map((ws) => (
-                <button
-                  key={ws.workspaceId}
-                  type="button"
-                  className={`w-full flex items-center gap-2 px-2.5 py-[7px] rounded-lg text-left text-[13px] ${ws.workspaceId === workspaceId ? "bg-apple-accent/10 text-apple-accent" : "text-apple-fg hover:bg-apple-bg"}`}
-                  onClick={() => {
-                    onSelectWorkspace(ws.workspaceId);
-                    setWorkspaceMenuOpen(false);
-                  }}
-                >
-                  <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{ws.workspaceId.charAt(0).toUpperCase()}</span>
-                  <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{ws.workspaceId}</span>
-                </button>
-              ))}
+                {workspaces.map((ws) => (
+                  <button
+                    key={ws.workspaceId}
+                    type="button"
+                    className={`w-full flex items-center gap-2 px-2.5 py-[7px] rounded-lg text-left text-[13px] ${ws.workspaceId === workspaceId ? "bg-apple-accent/10 text-apple-accent" : "text-apple-fg hover:bg-apple-bg"}`}
+                    onClick={() => {
+                      onSelectWorkspace(ws.workspaceId);
+                      setWorkspaceMenuOpen(false);
+                    }}
+                  >
+                    <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{ws.workspaceId.charAt(0).toUpperCase()}</span>
+                    <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{ws.name || ws.workspaceId}</span>
+                  </button>
+                ))}
               <div className="border-t border-black/[0.06] my-1" />
               <form
                 className="flex items-center gap-1.5 px-2 py-1"

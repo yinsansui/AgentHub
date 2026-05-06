@@ -11,6 +11,7 @@ export function useSessionList(workspaceId: string) {
   const loadingRef = useRef(false);
 
   const loadMoreSessions = useCallback(async (reset = false) => {
+    if (!workspaceId) return;
     if (loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);

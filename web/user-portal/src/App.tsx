@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { errorMessage, sessionStorageKey } from "./lib/utils";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useSessionList } from "./hooks/useSessionList";
@@ -9,26 +9,50 @@ import { ChatPanel } from "./components/ChatPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import type { Notice } from "./hooks/useWorkspace";
 import type { FormEvent } from "react";
-
-const defaultWorkspaceId = "ws_dev";
+import type { WorkspaceProjection } from "./types";
 
 type NavigationPanel = "sessions" | "settings";
 type SettingsTab = "llm" | "skills" | "mcp";
 
-export default function App() {
-  const initialWorkspaceId = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("workspaceId")?.trim() || defaultWorkspaceId;
-  }, []);
+function resolveInitialWorkspaceId(workspaces: WorkspaceProjection[]): string {
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get("workspaceId")?.trim();
+  if (fromUrl) return fromUrl;
+  if (workspaces.length > 0) return workspaces[0].workspaceId;
+  return "";
+}
 
-  const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
-  const [workspaceDraft, setWorkspaceDraft] = useState(initialWorkspaceId);
+export default function App() {
+  const workspaceList = useWorkspaceList();
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [activePanel, setActivePanel] = useState<NavigationPanel>("sessions");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("llm");
 
   const workspace = useWorkspace(workspaceId);
   const sessions = useSessionList(workspaceId);
-  const workspaceList = useWorkspaceList();
+
+  useEffect(() => {
+    if (workspaceList.loaded) return;
+    void workspaceList.loadWorkspaces();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceList.loaded) return;
+    const resolved = resolveInitialWorkspaceId(workspaceList.workspaces);
+    if (!resolved) return;
+    if (resolved === workspaceId) return;
+    setWorkspaceId(resolved);
+    const selected = workspaceList.workspaces.find((w) => w.workspaceId === resolved);
+    setWorkspaceDraft(selected?.name ?? resolved);
+    const url = new URL(window.location.href);
+    url.searchParams.set("workspaceId", resolved);
+    window.history.replaceState(null, "", url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceList.loaded, workspaceList.workspaces]);
+
+
 
   const reportError = useCallback(
     (error: unknown, fallback: string) => {
@@ -50,6 +74,7 @@ export default function App() {
   }, [workspace.notice, workspace.setNotice]);
 
   useEffect(() => {
+    if (!workspaceId) return;
     void workspace.refreshWorkspace();
     sessions.resetSessions();
     void sessions.loadMoreSessions(true);
@@ -64,7 +89,8 @@ export default function App() {
 
   function handleWorkspaceSubmit(event: FormEvent) {
     event.preventDefault();
-    const next = workspaceDraft.trim() || defaultWorkspaceId;
+    const next = workspaceDraft.trim();
+    if (!next) return;
     setWorkspaceId(next);
     const url = new URL(window.location.href);
     url.searchParams.set("workspaceId", next);
@@ -73,7 +99,8 @@ export default function App() {
 
   function handleSelectWorkspace(nextId: string) {
     setWorkspaceId(nextId);
-    setWorkspaceDraft(nextId);
+    const selected = workspaceList.workspaces.find((w) => w.workspaceId === nextId);
+    setWorkspaceDraft(selected?.name ?? nextId);
     const url = new URL(window.location.href);
     url.searchParams.set("workspaceId", nextId);
     window.history.replaceState(null, "", url);
@@ -144,6 +171,7 @@ export default function App() {
             onWorkspaceSubmit={handleWorkspaceSubmit}
             workspaces={workspaceList.workspaces}
             workspacesLoading={workspaceList.loading}
+            workspacesLoaded={workspaceList.loaded}
             onLoadWorkspaces={workspaceList.loadWorkspaces}
             onSelectWorkspace={handleSelectWorkspace}
             sessionList={sessions.sessionList}

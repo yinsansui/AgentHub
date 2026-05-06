@@ -78,6 +78,7 @@ export function useWorkspace(workspaceId: string) {
   }, []);
 
   const refreshWorkspace = useCallback(async () => {
+    if (!workspaceId) return;
     setLoadState("loading");
     setNotice(null);
     try {
