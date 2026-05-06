@@ -28,7 +28,7 @@ export function SessionSidebar({
       <div className="px-2 pt-1 pb-2">
         <button type="button" className="w-full justify-start min-h-9 px-2.5 py-[7px] rounded-[10px] bg-apple-panel shadow-apple text-[13px] font-normal hover:bg-white/90" onClick={onNewSession}>
           <SquarePen size={15} />
-          New Session
+          新 Session
         </button>
       </div>
 
@@ -52,18 +52,18 @@ export function SessionSidebar({
             <small className="text-apple-fg-50 text-[11px] overflow-hidden text-ellipsis whitespace-nowrap w-full">{s.modelId || ""}</small>
           </button>
         ))}
-        {sessionList.length === 0 && <p className="empty-copy">No sessions yet.</p>}
+        {sessionList.length === 0 && <p className="empty-copy">暂无 session。</p>}
       </div>
 
       <div className="flex flex-col gap-1 p-2">
-        <button type="button" className="w-full justify-start gap-2 min-h-8 px-2 py-[5px] rounded-md bg-transparent shadow-none text-[13px] text-apple-fg-50 hover:bg-apple-fg-5 hover:text-apple-fg" onClick={onOpenSettings} aria-label="Settings">
+        <button type="button" className="w-full justify-start gap-2 min-h-8 px-2 py-[5px] rounded-md bg-transparent shadow-none text-[13px] text-apple-fg-50 hover:bg-apple-fg-5 hover:text-apple-fg" onClick={onOpenSettings} aria-label="设置">
           <Settings size={16} />
-          <span>Settings</span>
+          <span>设置</span>
         </button>
         <form className="flex-1 min-w-0 flex items-center gap-1.5 h-[34px] px-2 rounded-lg bg-transparent hover:bg-apple-fg-5" onSubmit={onWorkspaceSubmit}>
           <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{workspaceId.charAt(0).toUpperCase()}</span>
           <input className="min-w-0 p-0 bg-transparent shadow-none text-[13px]" value={workspaceDraft} onChange={(e) => setWorkspaceDraft(e.target.value)} aria-label="Workspace" />
-          <button type="submit" className="min-h-7 w-7 p-0 bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5" aria-label="Open workspace"><ChevronDown size={14} /></button>
+          <button type="submit" className="min-h-7 w-7 p-0 bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5" aria-label="打开 Workspace"><ChevronDown size={14} /></button>
         </form>
       </div>
     </>

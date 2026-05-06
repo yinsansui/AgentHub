@@ -7,7 +7,7 @@ export function MessageBubble({ message }: { message: MessageProjection }) {
       <div className={isUser ? "max-w-[min(80%,660px)] px-4 py-[11px] rounded-[18px] bg-black/[0.06] overflow-wrap-anywhere max-[700px]:max-w-full" : "rounded-2xl bg-apple-panel shadow-[0_1px_4px_rgba(0,0,0,0.06)] px-4 py-3.5"}>
         {!isUser && (
           <header className="flex justify-between gap-3 mb-2 text-apple-fg-50 text-xs">
-            <span className="font-semibold text-apple-fg">{message.status === "streaming" ? "Streaming" : "Agent response"}</span>
+            <span className="font-semibold text-apple-fg">{message.status === "streaming" ? "生成中" : "Agent 回复"}</span>
             <small>{message.runId}</small>
           </header>
         )}
@@ -24,7 +24,7 @@ function BlockView({ block }: { block: UniversalBlock }) {
   if (block.type === "thinking") {
     return (
       <details className="overflow-wrap-anywhere rounded-xl px-3 py-2.5 bg-black/[0.03] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.07)]">
-        <summary className="cursor-pointer text-apple-fg-50 font-semibold">thinking</summary>
+        <summary className="cursor-pointer text-apple-fg-50 font-semibold">思考过程</summary>
         <pre className="mt-2 overflow-auto whitespace-pre-wrap font-mono text-xs">{block.text}</pre>
       </details>
     );

@@ -124,9 +124,9 @@ export function useWorkspace(workspaceId: string) {
       setLLMConnection(payload.connection);
       setApiKeySet(payload.apiKeySet);
       setLLMForm((c) => ({ ...c, apiKey: "" }));
-      setNotice({ tone: "success", text: "LLM connection 已保存" });
+      setNotice({ tone: "success", text: "LLM 连接已保存" });
     } catch (error) {
-      reportError(error, "保存 LLM connection 失败");
+      reportError(error, "保存 LLM 连接失败");
     }
   }
 
@@ -172,7 +172,7 @@ export function useWorkspace(workspaceId: string) {
         content: skill.files[0]?.content ?? ""
       });
     } catch (error) {
-      reportError(error, "读取 skill 失败");
+      reportError(error, "读取 Skill 失败");
     }
   }
 
@@ -186,9 +186,9 @@ export function useWorkspace(workspaceId: string) {
       });
       setSkills((c) => replaceBy(c, saved, (s) => s.definition.slug));
       setSkillEditorOpen(true);
-      setNotice({ tone: "success", text: "Skill 已保存，新 session 生效" });
+      setNotice({ tone: "success", text: "Skill 已保存，对新 session 生效" });
     } catch (error) {
-      reportError(error, "保存 skill 失败");
+      reportError(error, "保存 Skill 失败");
     }
   }
 
@@ -201,8 +201,12 @@ export function useWorkspace(workspaceId: string) {
         setSkillEditorOpen(false);
       }
     } catch (error) {
-      reportError(error, "删除 skill 失败");
+      reportError(error, "删除 Skill 失败");
     }
+  }
+
+  function handleCloseSkillEditor() {
+    setSkillEditorOpen(false);
   }
 
   function handleNewMCP() {
@@ -222,7 +226,7 @@ export function useWorkspace(workspaceId: string) {
         env: server.env.map((e) => `${e.name}=${e.value}`).join("\n")
       });
     } catch (error) {
-      reportError(error, "读取 MCP server 失败");
+      reportError(error, "读取 MCP 服务器失败");
     }
   }
 
@@ -237,9 +241,9 @@ export function useWorkspace(workspaceId: string) {
       });
       setMCPServers((c) => replaceBy(c, saved, (s) => s.definition.name));
       setMCPEditorOpen(true);
-      setNotice({ tone: "success", text: "MCP server 已保存，新 session 生效" });
+      setNotice({ tone: "success", text: "MCP 服务器已保存，对新 session 生效" });
     } catch (error) {
-      reportError(error, "保存 MCP server 失败");
+      reportError(error, "保存 MCP 服务器失败");
     }
   }
 
@@ -252,8 +256,12 @@ export function useWorkspace(workspaceId: string) {
         setMCPEditorOpen(false);
       }
     } catch (error) {
-      reportError(error, "删除 MCP server 失败");
+      reportError(error, "删除 MCP 服务器失败");
     }
+  }
+
+  function handleCloseMCPEditor() {
+    setMCPEditorOpen(false);
   }
 
   return {
@@ -264,7 +272,7 @@ export function useWorkspace(workspaceId: string) {
     refreshWorkspace,
     handleLoadLogs,
     handleSaveLLM, handleRefreshModels, handleUpsertModel, handleManualModel,
-    handleNewSkill, handleLoadSkill, handleSaveSkill, handleDeleteSkill,
-    handleNewMCP, handleLoadMCP, handleSaveMCP, handleDeleteMCP
+    handleNewSkill, handleLoadSkill, handleSaveSkill, handleDeleteSkill, handleCloseSkillEditor,
+    handleNewMCP, handleLoadMCP, handleSaveMCP, handleDeleteMCP, handleCloseMCPEditor
   };
 }
