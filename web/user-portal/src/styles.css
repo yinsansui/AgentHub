@@ -147,12 +147,618 @@
     color: var(--color-apple-success-text);
   }
 
-  .model-row.selected {
-    background: color-mix(in oklab, var(--color-apple-success) 10%, var(--color-apple-bg));
+  .notice-toast {
+    position: fixed;
+    top: 22px;
+    right: 22px;
+    z-index: 50;
+    width: min(360px, calc(100vw - 32px));
+    border-radius: 16px;
+    padding: 13px 16px;
+    background: rgba(255, 255, 255, 0.96);
+    color: var(--color-apple-fg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .notice-toast.success {
+    color: var(--color-apple-success-text);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-apple-success) 24%, transparent), 0 8px 24px rgba(0, 0, 0, 0.08);
+  }
+
+  .notice-toast.error {
+    color: var(--color-apple-destructive-text);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-apple-destructive) 24%, transparent), 0 8px 24px rgba(0, 0, 0, 0.08);
   }
 
   .error-block {
     color: var(--color-apple-destructive-text);
     background: color-mix(in oklab, var(--color-apple-destructive) 9%, var(--color-apple-bg));
+  }
+}
+
+@layer components {
+  .settings-shell {
+    min-height: 100vh;
+    background: var(--color-apple-bg);
+    display: grid;
+    padding: 24px;
+  }
+
+  .settings-frame {
+    width: min(1240px, calc(100vw - 48px));
+    height: calc(100vh - 48px);
+    min-height: 680px;
+    margin: auto;
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.76);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04);
+  }
+
+  .settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 24px 16px;
+    border-right: 1px solid var(--color-apple-fg-5);
+    background: rgba(245, 245, 247, 0.86);
+  }
+
+  .settings-back-button {
+    width: fit-content;
+    min-height: 30px;
+    padding: 0 8px;
+    justify-content: flex-start;
+    background: transparent;
+    color: var(--color-apple-fg-50);
+    border-radius: 10px;
+    box-shadow: none;
+    font-size: 13px;
+  }
+
+  .settings-back-button:hover:not(:disabled) {
+    background: var(--color-apple-fg-5);
+    color: var(--color-apple-fg);
+  }
+
+  .settings-nav-items {
+    display: grid;
+    gap: 6px;
+  }
+
+  .settings-nav-item {
+    display: grid;
+    width: 100%;
+    min-height: 54px;
+    justify-items: start;
+    gap: 2px;
+    padding: 9px 12px;
+    border-radius: 16px;
+    background: transparent;
+    box-shadow: none;
+    text-align: left;
+  }
+
+  .settings-nav-item span {
+    font-size: 14px;
+    font-weight: 520;
+  }
+
+  .settings-nav-item small {
+    color: var(--color-apple-fg-50);
+    font-size: 12px;
+  }
+
+  .settings-nav-item:hover:not(:disabled) {
+    background: var(--color-apple-fg-5);
+  }
+
+  .settings-nav-item.active {
+    background: var(--color-apple-panel);
+    box-shadow: inset 0 0 0 1.5px rgba(0, 113, 227, 0.18);
+  }
+
+  .settings-nav-item.active span {
+    color: var(--color-apple-accent);
+  }
+
+  .settings-nav-item:focus-visible,
+  .settings-back-button:focus-visible,
+  .settings-primary-button:focus-visible,
+  .settings-list-button:focus-visible,
+  .settings-delete-button:focus-visible,
+  .settings-page-actions button:focus-visible,
+  .settings-card-actions button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.16);
+  }
+
+  .settings-main {
+    min-width: 0;
+    overflow: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .settings-main::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-page {
+    width: min(960px, 100%);
+    margin: 0 auto;
+    padding: 56px clamp(24px, 5vw, 72px) 72px;
+  }
+
+  .settings-card-header p {
+    margin: 0;
+    color: var(--color-apple-fg-50);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .settings-page-actions,
+  .settings-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .settings-page-body,
+  .settings-single-grid {
+    display: grid;
+    gap: 20px;
+  }
+
+  .settings-split-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.35fr);
+    align-items: start;
+    gap: 20px;
+  }
+
+  .settings-main * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .settings-main *::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-card {
+    min-width: 0;
+    padding: 24px;
+    border: 1px solid var(--color-apple-fg-5);
+    border-radius: 24px;
+    background: var(--color-apple-panel);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.035);
+  }
+
+  .settings-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+
+  .settings-card-header h2 {
+    margin: 0 0 5px;
+    color: var(--color-apple-fg);
+    font-size: 20px;
+    line-height: 1.15;
+    font-weight: 640;
+    letter-spacing: -0.025em;
+  }
+
+  .settings-definition-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+  }
+
+  .settings-definition-grid div {
+    min-width: 0;
+    padding: 16px;
+    border-radius: 18px;
+    background: var(--color-apple-bg);
+  }
+
+  .settings-definition-grid .settings-definition-wide {
+    grid-column: 1 / -1;
+  }
+
+  .settings-definition-grid dt {
+    margin-bottom: 5px;
+    color: var(--color-apple-fg-50);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .settings-definition-grid dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--color-apple-fg);
+    font-size: 14px;
+  }
+
+  .settings-status-pill {
+    display: inline-flex;
+    min-height: 24px;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0 10px;
+    background: var(--color-apple-fg-5);
+    color: var(--color-apple-fg-50);
+    font-size: 12px;
+    font-weight: 560;
+  }
+
+  .settings-status-pill.online {
+    background: color-mix(in oklab, var(--color-apple-success) 12%, var(--color-apple-bg));
+    color: var(--color-apple-success-text);
+  }
+
+  .settings-log-panel {
+    max-height: min(520px, 55vh);
+    overflow: auto;
+    margin: 0;
+    padding: 16px;
+    border-radius: 18px;
+    background: var(--color-apple-bg);
+    color: var(--color-apple-fg);
+    white-space: pre-wrap;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    box-shadow: inset 0 0 0 1px var(--color-apple-fg-7);
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .settings-log-panel::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .settings-field {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    color: var(--color-apple-fg-50);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .settings-field-span,
+  .settings-form-footer {
+    grid-column: 1 / -1;
+  }
+
+  .settings-field input,
+  .settings-field textarea,
+  .settings-inline-form input {
+    border-radius: 15px;
+    background: var(--color-apple-bg);
+    box-shadow: inset 0 0 0 1px var(--color-apple-fg-7);
+    transition: box-shadow 120ms ease;
+  }
+
+  .settings-field input:focus,
+  .settings-field textarea:focus,
+  .settings-inline-form input:focus {
+    box-shadow: inset 0 0 0 1.5px var(--color-apple-accent), 0 0 0 3px rgba(0, 113, 227, 0.15);
+  }
+
+  .settings-code-textarea {
+    min-height: min(520px, 48vh);
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .settings-code-textarea::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-form-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding-top: 2px;
+  }
+
+  .settings-form-footer span {
+    color: var(--color-apple-fg-50);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .settings-inline-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .settings-primary-button {
+    background: var(--color-apple-accent);
+    color: #fff;
+    box-shadow: none;
+  }
+
+  .settings-primary-button:hover:not(:disabled) {
+    background: var(--color-apple-accent-hover);
+  }
+
+  .settings-list {
+    display: grid;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .settings-list-row,
+  .settings-model-row {
+    min-width: 0;
+    display: grid;
+    align-items: center;
+    border-radius: 18px;
+    background: var(--color-apple-bg);
+    box-shadow: inset 0 0 0 1px var(--color-apple-fg-5);
+    transition: background 120ms ease, box-shadow 120ms ease;
+  }
+
+  .settings-list-row {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .settings-list-row:hover,
+  .settings-list-row.active,
+  .settings-model-row:hover {
+    background: rgba(0, 113, 227, 0.06);
+  }
+
+  .settings-list-row.active {
+    box-shadow: inset 0 0 0 1.5px rgba(0, 113, 227, 0.18);
+  }
+
+  .settings-list-button {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) minmax(64px, auto);
+    width: 100%;
+    min-height: 46px;
+    justify-content: stretch;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 18px;
+    background: transparent;
+    box-shadow: none;
+    text-align: left;
+  }
+
+  .settings-list-button svg {
+    color: var(--color-apple-fg-50);
+  }
+
+  .settings-list-button span,
+  .settings-model-row span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-apple-fg);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-list-button small,
+  .settings-model-row small {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-apple-fg-50);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-delete-button {
+    width: 30px;
+    min-height: 30px;
+    padding: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--color-apple-fg-50);
+    box-shadow: none;
+  }
+
+  .settings-delete-button:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--color-apple-destructive) 10%, var(--color-apple-bg));
+    color: var(--color-apple-destructive-text);
+  }
+
+  .settings-model-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    min-height: 46px;
+    padding: 10px 12px;
+  }
+
+  .settings-model-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-apple-accent);
+    box-shadow: none;
+  }
+
+  .settings-model-row.selected {
+    background: rgba(0, 113, 227, 0.08);
+    box-shadow: inset 0 0 0 1.5px rgba(0, 113, 227, 0.2);
+  }
+
+  .empty-copy {
+    margin: 0;
+    padding: 20px;
+    border-radius: 18px;
+    background: var(--color-apple-bg);
+    text-align: center;
+  }
+
+  .model-dropdown {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .model-dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0 8px;
+    border-radius: 8px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--color-apple-fg-50);
+    font-size: 13px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  .model-dropdown-trigger:hover:not(:disabled),
+  .model-dropdown-trigger.open {
+    background: var(--color-apple-fg-5);
+    color: var(--color-apple-fg);
+  }
+
+  .model-dropdown-trigger:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.16);
+  }
+
+  .model-dropdown-trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.38;
+  }
+
+  .model-dropdown-label {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .model-dropdown-list {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 50;
+    min-width: 180px;
+    max-width: 260px;
+    max-height: min(240px, calc(100vh - 140px));
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    display: grid;
+    gap: 1px;
+  }
+
+  .model-dropdown-option {
+    display: flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 8px;
+    color: var(--color-apple-fg);
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+    transition: background 80ms ease;
+  }
+
+  .model-dropdown-option:hover,
+  .model-dropdown-option.active {
+    background: rgba(0, 113, 227, 0.08);
+  }
+
+  .model-dropdown-option.selected {
+    font-weight: 600;
+  }
+}
+
+@media (max-width: 900px) {
+  .notice-toast {
+    top: 14px;
+    right: 14px;
+    width: min(340px, calc(100vw - 28px));
+  }
+
+  .settings-shell {
+    padding: 0;
+  }
+
+  .settings-frame {
+    width: 100vw;
+    height: 100vh;
+    min-height: 0;
+    grid-template-columns: 1fr;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .settings-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-apple-fg-5);
+  }
+
+  .settings-nav-items {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-page {
+    padding: 34px 18px 44px;
+  }
+
+  .settings-card-header,
+  .settings-form-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-split-grid,
+  .settings-form,
+  .settings-definition-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-field-span,
+  .settings-form-footer,
+  .settings-definition-grid .settings-definition-wide {
+    grid-column: auto;
   }
 }

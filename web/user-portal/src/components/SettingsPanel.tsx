@@ -1,21 +1,13 @@
-import { FileText, Plus, RefreshCw, Save, ScrollText, Server, Trash2 } from "lucide-react";
-import type { FormEvent } from "react";
-import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, PodInfo, SkillDefinitionWithFiles } from "../types";
-import type { Notice } from "../hooks/useWorkspace";
+import { FileText, Plus, RefreshCw, Save, Server, Trash2 } from "lucide-react";
+import type { FormEvent, ReactNode } from "react";
+import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles } from "../types";
 
-type SettingsTab = "runtime" | "llm" | "skills" | "mcp";
+type SettingsTab = "llm" | "skills" | "mcp";
 
 type Props = {
   settingsTab: SettingsTab;
   setSettingsTab: (tab: SettingsTab) => void;
   onBack: () => void;
-  notice: Notice | null;
-  pod: PodInfo | null;
-  logs: string;
-  showLogs: boolean;
-  workspaceId: string;
-  onRefreshWorkspace: () => void;
-  onLoadLogs: () => void;
   llmConnection: LLMConnection | null;
   llmForm: { provider: string; apiProtocol: string; baseUrl: string; apiKey: string };
   setLLMForm: (v: { provider: string; apiProtocol: string; baseUrl: string; apiKey: string }) => void;
@@ -34,6 +26,7 @@ type Props = {
   onLoadSkill: (slug: string) => void;
   onSaveSkill: (e: FormEvent) => void;
   onDeleteSkill: (slug: string) => void;
+  onCloseSkillEditor: () => void;
   mcpServers: MCPServerDefinitionWithEnv[];
   mcpForm: { name: string; command: string; args: string; transport: string; env: string };
   setMCPForm: (v: { name: string; command: string; args: string; transport: string; env: string }) => void;
@@ -42,153 +35,199 @@ type Props = {
   onLoadMCP: (name: string) => void;
   onSaveMCP: (e: FormEvent) => void;
   onDeleteMCP: (name: string) => void;
+  onCloseMCPEditor: () => void;
 };
+
+type SettingsTabMeta = {
+  tab: SettingsTab;
+  label: string;
+};
+
+const settingsTabs: SettingsTabMeta[] = [
+  { tab: "llm", label: "LLM" },
+  { tab: "skills", label: "Skill" },
+  { tab: "mcp", label: "MCP" }
+];
+
+function Field(props: { label: string; span?: boolean; children: ReactNode }) {
+  return (
+    <label className={`settings-field ${props.span ? "settings-field-span" : ""}`}>
+      <span>{props.label}</span>
+      {props.children}
+    </label>
+  );
+}
+
+function PageShell(props: { actions?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="settings-page">
+      {props.actions && <div className="settings-page-actions">{props.actions}</div>}
+      <div className="settings-page-body">{props.children}</div>
+    </section>
+  );
+}
+
+function SectionCard(props: { title: string; description?: string; actions?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="settings-card">
+      <div className="settings-card-header">
+        <div>
+          <h2>{props.title}</h2>
+          {props.description && <p>{props.description}</p>}
+        </div>
+        {props.actions && <div className="settings-card-actions">{props.actions}</div>}
+      </div>
+      {props.children}
+    </section>
+  );
+}
 
 export function SettingsPanel(props: Props) {
   const {
-    settingsTab, setSettingsTab, onBack, notice,
-    pod, logs, showLogs, workspaceId,
-    onRefreshWorkspace, onLoadLogs,
+    settingsTab, setSettingsTab, onBack,
     llmConnection, llmForm, setLLMForm, onSaveLLM,
     models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel,
-    skills, skillForm, setSkillForm, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill,
-    mcpServers, mcpForm, setMCPForm, mcpEditorOpen, onNewMCP, onLoadMCP, onSaveMCP, onDeleteMCP
+    skills, skillForm, setSkillForm, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor,
+    mcpServers, mcpForm, setMCPForm, mcpEditorOpen, onNewMCP, onLoadMCP, onSaveMCP, onDeleteMCP, onCloseMCPEditor
   } = props;
 
   return (
-    <main className="grid h-screen min-h-[720px] grid-cols-[220px_minmax(520px,1fr)] gap-2 p-2 max-[700px]:grid-cols-1 max-[700px]:p-0">
-      <div className="col-span-full grid grid-cols-[220px_1fr] bg-apple-panel shadow-apple-card rounded-2xl overflow-hidden h-full max-[700px]:grid-cols-1">
-        <nav className="border-r border-apple-fg-5 px-2 py-3 flex flex-col gap-0.5">
-          <button type="button" className="justify-start bg-transparent shadow-none text-[13px] text-apple-fg-50 px-2 py-[5px] hover:bg-apple-fg-5 hover:text-apple-fg" onClick={onBack}>← Back</button>
-          <div className="h-px bg-apple-fg-5 my-1.5" />
-          {(["runtime", "llm", "skills", "mcp"] as SettingsTab[]).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              className={`flex items-center gap-2 min-h-[30px] w-full justify-start text-left bg-transparent shadow-none rounded-lg px-2.5 py-[5px] text-[13px] text-apple-fg font-normal hover:bg-black/5 ${settingsTab === tab ? "bg-black/[0.07]" : ""}`}
-              onClick={() => setSettingsTab(tab)}
-            >
-              {tab === "runtime" && "Runtime"}
-              {tab === "llm" && "LLM & Models"}
-              {tab === "skills" && "Skills"}
-              {tab === "mcp" && "MCP Servers"}
-            </button>
-          ))}
+    <main className="settings-shell">
+      <div className="settings-frame">
+        <nav className="settings-nav" aria-label="设置分区">
+          <button type="button" className="settings-back-button" onClick={onBack}>← 返回工作台</button>
+          <div className="settings-nav-items">
+            {settingsTabs.map((item) => (
+              <button
+                key={item.tab}
+                type="button"
+                aria-current={settingsTab === item.tab ? "page" : undefined}
+                className={`settings-nav-item ${settingsTab === item.tab ? "active" : ""}`}
+                onClick={() => setSettingsTab(item.tab)}
+              >
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
         </nav>
-        <div className="overflow-auto flex flex-col">
-          {notice && <div className={`notice ${notice.tone}`}>{notice.text}</div>}
-          {settingsTab === "runtime" && (
-            <div className="min-h-0 grid content-start gap-3.5 px-5 pt-[18px] pb-[22px]">
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => void onRefreshWorkspace()}><RefreshCw size={14} />Refresh</button>
-                <button type="button" onClick={() => void onLoadLogs()}><ScrollText size={14} />Logs</button>
-              </div>
-              <dl className="grid gap-[7px] m-0 rounded-xl p-3.5 bg-black/[0.03] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.07)] [&_div]:grid [&_div]:gap-[3px] [&_dd]:m-0 [&_dd]:overflow-wrap-anywhere [&_dd]:text-[13px]">
-                <div><dt>Workspace</dt><dd>{workspaceId}</dd></div>
-                <div><dt>Pod</dt><dd>{pod?.name ?? "not found"}</dd></div>
-                <div><dt>Image</dt><dd>{pod?.image ?? "-"}</dd></div>
-                <div><dt>Endpoint</dt><dd>{pod?.endpoint ?? "-"}</dd></div>
-              </dl>
-              {showLogs && <pre className="max-h-[260px] overflow-auto m-0 p-2.5 bg-[color-mix(in_oklab,var(--color-apple-fg)_88%,black)] text-[color-mix(in_oklab,var(--color-apple-bg)_88%,white)] rounded-lg whitespace-pre-wrap text-xs max-h-[min(520px,55vh)]">{logs || "No logs loaded."}</pre>}
-            </div>
-          )}
+        <div className="settings-main">
           {settingsTab === "llm" && (
-            <div className="min-h-0 grid content-start gap-3.5 px-5 pt-[18px] pb-[22px]">
-              <form className="grid gap-[9px]" onSubmit={onSaveLLM}>
-                <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Provider<input value={llmForm.provider} onChange={(e) => setLLMForm({ ...llmForm, provider: e.target.value })} /></label>
-                <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">API protocol<input value={llmForm.apiProtocol} onChange={(e) => setLLMForm({ ...llmForm, apiProtocol: e.target.value })} /></label>
-                <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Base URL<input value={llmForm.baseUrl} onChange={(e) => setLLMForm({ ...llmForm, baseUrl: e.target.value })} placeholder="http://example.local:8084" /></label>
-                <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">API key<input value={llmForm.apiKey} onChange={(e) => setLLMForm({ ...llmForm, apiKey: e.target.value })} type="password" placeholder={llmConnection ? "Required to update" : "Required"} /></label>
-                <button type="submit"><Save size={14} />Save connection</button>
-              </form>
-              <div className="flex items-center justify-between gap-3 mt-2">
-                <h3 className="text-sm">Models</h3>
-                <button type="button" onClick={() => void onRefreshModels()}><RefreshCw size={14} />Refresh</button>
-              </div>
-              <form className="flex gap-[7px]" onSubmit={onManualModel}>
-                <input className="min-w-0" value={manualModelId} onChange={(e) => setManualModelId(e.target.value)} placeholder="modelId" />
-                <button type="submit"><Plus size={14} />Add</button>
-              </form>
-              <div className="grid gap-[9px]">
-                {models.map((model) => (
-                  <label key={model.id || model.modelId} className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 min-h-9 rounded-xl bg-black/[0.03] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.07)] px-2.5 py-2 ${model.enabled ? "selected" : ""}`}>
-                    <input type="checkbox" className="w-auto" checked={model.enabled} onChange={(e) => void onUpsertModel(model.modelId, e.target.checked, model.source)} />
-                    <span className="min-w-0 overflow-wrap-anywhere">{model.modelId}</span>
-                    <small className="text-apple-fg-50">{model.source}</small>
-                  </label>
-                ))}
-                {models.length === 0 && <p className="empty-copy">No models configured.</p>}
-              </div>
-            </div>
+            <PageShell>
+              <SectionCard title="连接" description="配置供应商凭证与端点。">
+                <form className="settings-form" onSubmit={onSaveLLM}>
+                  <Field label="供应商"><input value={llmForm.provider} onChange={(e) => setLLMForm({ ...llmForm, provider: e.target.value })} /></Field>
+                  <Field label="API 协议"><input value={llmForm.apiProtocol} onChange={(e) => setLLMForm({ ...llmForm, apiProtocol: e.target.value })} /></Field>
+                  <Field label="Base URL" span><input value={llmForm.baseUrl} onChange={(e) => setLLMForm({ ...llmForm, baseUrl: e.target.value })} placeholder="http://example.local:8084" /></Field>
+                  <Field label="API key" span><input value={llmForm.apiKey} onChange={(e) => setLLMForm({ ...llmForm, apiKey: e.target.value })} type="password" placeholder={llmConnection ? "更新时必填" : "必填"} /></Field>
+                  <div className="settings-form-footer">
+                    <span>{llmConnection ? "已检测到现有连接。API key 仅在编辑时显示。" : "尚未保存连接。"}</span>
+                    <button type="submit" className="settings-primary-button"><Save size={14} />保存连接</button>
+                  </div>
+                </form>
+              </SectionCard>
+              <SectionCard
+                title="模型"
+                description="仅启用当前 Workspace 需要暴露的 modelId。"
+                actions={<button type="button" onClick={() => void onRefreshModels()}><RefreshCw size={14} />刷新</button>}
+              >
+                <form className="settings-inline-form" onSubmit={onManualModel}>
+                  <input className="min-w-0" value={manualModelId} onChange={(e) => setManualModelId(e.target.value)} placeholder="modelId" />
+                  <button type="submit" className="settings-primary-button"><Plus size={14} />添加</button>
+                </form>
+                <div className="settings-list settings-model-list">
+                  {models.map((model) => (
+                    <label key={model.id || model.modelId} className={`settings-model-row ${model.enabled ? "selected" : ""}`}>
+                      <input type="checkbox" checked={model.enabled} onChange={(e) => void onUpsertModel(model.modelId, e.target.checked, model.source)} />
+                      <span>{model.modelId}</span>
+                      <small>{model.source}</small>
+                    </label>
+                  ))}
+                  {models.length === 0 && <p className="empty-copy">未配置模型。</p>}
+                </div>
+              </SectionCard>
+            </PageShell>
           )}
           {settingsTab === "skills" && (
-            <div className="min-h-0 grid content-start gap-3.5 px-5 pt-[18px] pb-[22px]">
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={onNewSkill}><Plus size={14} />New skill</button>
-              </div>
-              <div className="grid gap-[9px] overflow-auto min-h-0 pr-0.5">
-                {skills.map((skill) => (
-                  <div className={`min-w-0 rounded-lg grid grid-cols-[1fr_auto] items-center hover:bg-apple-fg-5 active:bg-apple-fg-7 ${skillEditorOpen && skillForm.slug === skill.definition.slug ? "bg-apple-fg-7" : ""}`} key={skill.definition.slug}>
-                    <button type="button" className="w-full min-h-9 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-[7px] bg-transparent shadow-none text-left justify-stretch" onClick={() => void onLoadSkill(skill.definition.slug)}>
-                      <FileText className="text-apple-fg-50" size={15} />
-                      <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{skill.definition.slug}</span>
-                      <small className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-apple-fg-50 text-[12px]">{skill.definition.name || "skill"}</small>
-                    </button>
-                    <button type="button" className="min-h-7 w-7 p-0 bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 danger-text" aria-label={`Delete ${skill.definition.slug}`} onClick={() => void onDeleteSkill(skill.definition.slug)}>
-                      <Trash2 size={14} />
-                    </button>
+            <PageShell>
+              {!skillEditorOpen ? (
+                <SectionCard
+                  title="Skill 列表"
+                  description="注入到新 session 的 Skill 包。"
+                  actions={<button type="button" className="settings-primary-button" onClick={onNewSkill}><Plus size={14} />新建 Skill</button>}
+                >
+                  <div className="settings-list">
+                    {skills.map((skill) => (
+                      <div className="settings-list-row" key={skill.definition.slug}>
+                        <button type="button" className="settings-list-button" onClick={() => void onLoadSkill(skill.definition.slug)}>
+                          <FileText size={15} />
+                          <span>{skill.definition.slug}</span>
+                          <small>{skill.definition.name || "Skill"}</small>
+                        </button>
+                        <button type="button" className="settings-delete-button" aria-label={`删除 ${skill.definition.slug}`} onClick={() => void onDeleteSkill(skill.definition.slug)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    {skills.length === 0 && <p className="empty-copy">暂无 Skill。</p>}
                   </div>
-                ))}
-                {skills.length === 0 && <p className="empty-copy">No workspace skills.</p>}
-              </div>
-              {skillEditorOpen && (
-                <form className="grid gap-[9px]" onSubmit={onSaveSkill}>
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Slug<input value={skillForm.slug} onChange={(e) => setSkillForm({ ...skillForm, slug: e.target.value })} /></label>
-                    <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Name<input value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} /></label>
-                    <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase span-2">Description<input value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} /></label>
-                    <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase span-2">File path<input value={skillForm.path} onChange={(e) => setSkillForm({ ...skillForm, path: e.target.value })} /></label>
-                  </div>
-                  <label className="min-h-0 grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Content<textarea className="min-h-[min(520px,55vh)] resize-y font-mono text-[13px] leading-relaxed whitespace-pre" value={skillForm.content} onChange={(e) => setSkillForm({ ...skillForm, content: e.target.value })} /></label>
-                  <div className="flex flex-wrap gap-2 justify-between items-center">
-                    <span className="text-apple-fg-50 text-[12px]">Saved skills affect new sessions.</span>
-                    <button type="submit"><Save size={14} />Save skill</button>
-                  </div>
-                </form>
+                </SectionCard>
+              ) : (
+                <SectionCard title="Skill 编辑器" description="编辑元数据与包入口文件。" actions={<button type="button" className="settings-back-button" onClick={onCloseSkillEditor}>← 返回列表</button>}>
+                  <form className="settings-form" onSubmit={onSaveSkill}>
+                    <Field label="Slug"><input value={skillForm.slug} onChange={(e) => setSkillForm({ ...skillForm, slug: e.target.value })} /></Field>
+                    <Field label="名称"><input value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} /></Field>
+                    <Field label="描述" span><input value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} /></Field>
+                    <Field label="文件路径" span><input value={skillForm.path} onChange={(e) => setSkillForm({ ...skillForm, path: e.target.value })} /></Field>
+                    <Field label="内容" span><textarea className="settings-code-textarea" value={skillForm.content} onChange={(e) => setSkillForm({ ...skillForm, content: e.target.value })} /></Field>
+                    <div className="settings-form-footer">
+                      <span>保存后的 Skill 仅对新 session 生效。</span>
+                      <button type="submit" className="settings-primary-button"><Save size={14} />保存 Skill</button>
+                    </div>
+                  </form>
+                </SectionCard>
               )}
-            </div>
+            </PageShell>
           )}
           {settingsTab === "mcp" && (
-            <div className="min-h-0 grid content-start gap-3.5 px-5 pt-[18px] pb-[22px]">
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={onNewMCP}><Plus size={14} />New server</button>
-              </div>
-              <div className="grid gap-[9px] overflow-auto min-h-0 pr-0.5">
-                {mcpServers.map((server) => (
-                  <div className={`min-w-0 rounded-lg grid grid-cols-[1fr_auto] items-center hover:bg-apple-fg-5 active:bg-apple-fg-7 ${mcpEditorOpen && mcpForm.name === server.definition.name ? "bg-apple-fg-7" : ""}`} key={server.definition.name}>
-                    <button type="button" className="w-full min-h-9 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-[7px] bg-transparent shadow-none text-left justify-stretch" onClick={() => void onLoadMCP(server.definition.name)}>
-                      <Server className="text-apple-fg-50" size={15} />
-                      <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{server.definition.name}</span>
-                      <small className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-apple-fg-50 text-[12px]">{server.definition.transport || "stdio"}</small>
-                    </button>
-                    <button type="button" className="min-h-7 w-7 p-0 bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 danger-text" aria-label={`Delete ${server.definition.name}`} onClick={() => void onDeleteMCP(server.definition.name)}>
-                      <Trash2 size={14} />
-                    </button>
+            <PageShell>
+              {!mcpEditorOpen ? (
+                <SectionCard
+                  title="服务器列表"
+                  description="Workspace 工具服务器与环境变量。"
+                  actions={<button type="button" className="settings-primary-button" onClick={onNewMCP}><Plus size={14} />新建服务器</button>}
+                >
+                  <div className="settings-list">
+                    {mcpServers.map((server) => (
+                      <div className="settings-list-row" key={server.definition.name}>
+                        <button type="button" className="settings-list-button" onClick={() => void onLoadMCP(server.definition.name)}>
+                          <Server size={15} />
+                          <span>{server.definition.name}</span>
+                          <small>{server.definition.transport || "stdio"}</small>
+                        </button>
+                        <button type="button" className="settings-delete-button" aria-label={`删除 ${server.definition.name}`} onClick={() => void onDeleteMCP(server.definition.name)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    {mcpServers.length === 0 && <p className="empty-copy">暂无 MCP 服务器。</p>}
                   </div>
-                ))}
-                {mcpServers.length === 0 && <p className="empty-copy">No MCP servers.</p>}
-              </div>
-              {mcpEditorOpen && (
-                <form className="grid gap-[9px]" onSubmit={onSaveMCP}>
-                  <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Name<input value={mcpForm.name} onChange={(e) => setMCPForm({ ...mcpForm, name: e.target.value })} /></label>
-                  <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Command<input value={mcpForm.command} onChange={(e) => setMCPForm({ ...mcpForm, command: e.target.value })} /></label>
-                  <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Args<textarea value={mcpForm.args} onChange={(e) => setMCPForm({ ...mcpForm, args: e.target.value })} placeholder="One argument per line" /></label>
-                  <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Transport<input value={mcpForm.transport} onChange={(e) => setMCPForm({ ...mcpForm, transport: e.target.value })} /></label>
-                  <label className="grid gap-[5px] text-apple-fg-50 text-[11px] font-semibold uppercase">Env<textarea value={mcpForm.env} onChange={(e) => setMCPForm({ ...mcpForm, env: e.target.value })} placeholder="KEY=value" /></label>
-                  <button type="submit"><Save size={14} />Save MCP</button>
-                </form>
+                </SectionCard>
+              ) : (
+                <SectionCard title="服务器编辑器" description="命令、参数与环境变量输入。" actions={<button type="button" className="settings-back-button" onClick={onCloseMCPEditor}>← 返回列表</button>}>
+                  <form className="settings-form" onSubmit={onSaveMCP}>
+                    <Field label="名称" span><input value={mcpForm.name} onChange={(e) => setMCPForm({ ...mcpForm, name: e.target.value })} /></Field>
+                    <Field label="命令" span><input value={mcpForm.command} onChange={(e) => setMCPForm({ ...mcpForm, command: e.target.value })} /></Field>
+                    <Field label="参数" span><textarea value={mcpForm.args} onChange={(e) => setMCPForm({ ...mcpForm, args: e.target.value })} placeholder="每行一个参数" /></Field>
+                    <Field label="Transport" span><input value={mcpForm.transport} onChange={(e) => setMCPForm({ ...mcpForm, transport: e.target.value })} /></Field>
+                    <Field label="Env" span><textarea value={mcpForm.env} onChange={(e) => setMCPForm({ ...mcpForm, env: e.target.value })} placeholder="KEY=value" /></Field>
+                    <div className="settings-form-footer">
+                      <span>环境变量按 Workspace 服务器存储。</span>
+                      <button type="submit" className="settings-primary-button"><Save size={14} />保存 MCP</button>
+                    </div>
+                  </form>
+                </SectionCard>
               )}
-            </div>
+            </PageShell>
           )}
         </div>
       </div>

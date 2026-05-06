@@ -1,12 +1,11 @@
-import { ArrowUp, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, Plus } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { LLMModel, WorkbenchState } from "../types";
-import type { Notice } from "../hooks/useWorkspace";
 import { MessageBubble } from "./MessageBubble";
 
 type Props = {
   workbench: WorkbenchState;
-  notice: Notice | null;
   enabledModels: LLMModel[];
   messageDraft: string;
   setMessageDraft: (v: string) => void;
@@ -16,8 +15,173 @@ type Props = {
   onStop: () => void;
 };
 
+function ModelDropdown({
+  value,
+  onChange,
+  options,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: LLMModel[];
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const listId = `${id}-list`;
+
+  const allOptions = useMemo(
+    () => [
+      { label: "默认 model", value: "" },
+      ...options.map((m) => ({ label: m.modelId, value: m.modelId })),
+    ],
+    [options]
+  );
+
+  const selectedLabel = allOptions.find((o) => o.value === value)?.label ?? "默认 model";
+
+  const handleOpen = useCallback(() => {
+    if (disabled) return;
+    const idx = allOptions.findIndex((o) => o.value === value);
+    setActiveIndex(idx >= 0 ? idx : 0);
+    setOpen(true);
+  }, [disabled, allOptions, value]);
+
+  const handleClose = useCallback((restoreFocus = true) => {
+    setOpen(false);
+    if (restoreFocus) {
+      triggerRef.current?.focus();
+    }
+  }, []);
+
+  const selectOption = useCallback(
+    (index: number) => {
+      if (disabled) return;
+      const opt = allOptions[index];
+      if (opt && opt.value !== value) {
+        onChange(opt.value);
+      }
+      setOpen(false);
+      triggerRef.current?.focus();
+    },
+    [allOptions, disabled, onChange, value]
+  );
+
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        listRef.current?.contains(target) ||
+        triggerRef.current?.contains(target)
+      ) {
+        return;
+      }
+      handleClose(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open, handleClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      switch (e.key) {
+        case "Escape":
+          e.preventDefault();
+          handleClose();
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          setActiveIndex((i) => Math.min(i + 1, allOptions.length - 1));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setActiveIndex((i) => Math.max(i - 1, 0));
+          break;
+        case "Enter":
+        case " ":
+          e.preventDefault();
+          selectOption(activeIndex);
+          break;
+        case "Tab":
+          handleClose(false);
+          break;
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, activeIndex, allOptions.length, handleClose, selectOption]);
+
+  useEffect(() => {
+    if (open) {
+      listRef.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)?.focus();
+    }
+  }, [open, activeIndex]);
+
+  return (
+    <div className="model-dropdown">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`model-dropdown-trigger${open ? " open" : ""}`}
+        onClick={() => (open ? handleClose() : handleOpen())}
+        onKeyDown={(e) => {
+          if (["ArrowDown", "ArrowUp"].includes(e.key)) {
+            e.preventDefault();
+            handleOpen();
+          }
+        }}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        id={`${id}-trigger`}
+      >
+        <span className="model-dropdown-label">{selectedLabel}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div
+          ref={listRef}
+          id={listId}
+          className="model-dropdown-list"
+          role="listbox"
+          aria-labelledby={`${id}-trigger`}
+          aria-activedescendant={`${id}-opt-${activeIndex}`}
+        >
+          {allOptions.map((opt, i) => (
+            <div
+              key={opt.value}
+              id={`${id}-opt-${i}`}
+              data-index={i}
+              className={`model-dropdown-option${i === activeIndex ? " active" : ""}${opt.value === value ? " selected" : ""}`}
+              role="option"
+              aria-selected={opt.value === value}
+              tabIndex={-1}
+              onMouseEnter={() => setActiveIndex(i)}
+              onClick={() => selectOption(i)}
+            >
+              {opt.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatPanel({
-  workbench, notice, enabledModels,
+  workbench, enabledModels,
   messageDraft, setMessageDraft,
   selectedModelId, setSelectedModelId,
   onSubmit
@@ -26,7 +190,6 @@ export function ChatPanel({
 
   return (
     <>
-      {notice && <div className={`notice ${notice.tone}`}>{notice.text}</div>}
       {workbench.systemError && <div className="notice error">{workbench.systemError}</div>}
 
       <div className="conversation-mask">
@@ -48,7 +211,7 @@ export function ChatPanel({
             className="min-h-[72px] max-h-[200px] rounded-none p-0 bg-transparent shadow-none resize-none border-none outline-none text-[15px] leading-normal"
             value={messageDraft}
             onChange={(e) => setMessageDraft(e.target.value)}
-            placeholder="Message AgentHub..."
+            placeholder="给 AgentHub 发送消息…"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -58,18 +221,15 @@ export function ChatPanel({
           />
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1">
-              <button type="button" className="w-[30px] h-[30px] min-h-[30px] p-0 rounded-lg bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 hover:text-apple-fg" aria-label="Add"><Plus size={16} /></button>
-              <select
-                className="w-auto h-[30px] px-2 rounded-lg shadow-none bg-transparent text-[13px] text-apple-fg-50 cursor-pointer"
+              <button type="button" className="w-[30px] h-[30px] min-h-[30px] p-0 rounded-lg bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 hover:text-apple-fg" aria-label="添加"><Plus size={16} /></button>
+              <ModelDropdown
                 value={selectedModelId}
-                onChange={(e) => setSelectedModelId(e.target.value)}
+                onChange={setSelectedModelId}
+                options={enabledModels}
                 disabled={Boolean(workbench.sessionId)}
-              >
-                <option value="">Default model</option>
-                {enabledModels.map((m) => <option key={m.modelId} value={m.modelId}>{m.modelId}</option>)}
-              </select>
+              />
             </div>
-            <button type="submit" className="w-8 h-8 min-h-8 p-0 rounded-full bg-apple-accent shadow-none text-white transition-opacity duration-[120ms] ease-out hover:bg-apple-accent-hover hover:text-white disabled:bg-black/15 disabled:text-black/35 disabled:opacity-100" disabled={!canSend} aria-label="Send">
+            <button type="submit" className="w-8 h-8 min-h-8 p-0 rounded-full bg-apple-accent shadow-none text-white transition-opacity duration-[120ms] ease-out hover:bg-apple-accent-hover hover:text-white disabled:bg-black/15 disabled:text-black/35 disabled:opacity-100" disabled={!canSend} aria-label="发送">
               <ArrowUp size={16} />
             </button>
           </div>
