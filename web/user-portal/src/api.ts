@@ -8,7 +8,8 @@ import type {
   SessionState,
   SkillDefinitionWithFiles,
   StoredEvent,
-  TaskProjection
+  TaskProjection,
+  WorkspaceProjection
 } from "./types";
 
 export class ApiError extends Error {
@@ -71,7 +72,7 @@ export async function getLLMConnection(workspaceId: string): Promise<{ connectio
 
 export async function saveLLMConnection(
   workspaceId: string,
-  body: { provider: string; apiProtocol: string; baseUrl: string; apiKey: string }
+  body: { apiProtocol: string; baseUrl: string; apiKey: string }
 ): Promise<{ connection: LLMConnection; apiKeySet: boolean }> {
   return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/llm-connection`, {
     method: "PUT",
@@ -153,6 +154,21 @@ export async function saveMCPServer(
 
 export async function deleteMCPServer(workspaceId: string, name: string): Promise<void> {
   await apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/mcp-servers/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export async function listWorkspaces(limit: number, offset: number): Promise<{ workspaces: WorkspaceProjection[]; limit: number; offset: number }> {
+  return apiRequest(`/workspaces?limit=${limit}&offset=${offset}`);
+}
+
+export async function getWorkspace(workspaceId: string): Promise<{ workspace: WorkspaceProjection }> {
+  return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}`);
+}
+
+export async function createWorkspace(workspaceId: string, name?: string, description?: string): Promise<{ workspace: WorkspaceProjection }> {
+  return apiRequest(`/workspaces`, {
+    method: "POST",
+    body: JSON.stringify({ workspaceId, name, description })
+  });
 }
 
 export async function listSessions(workspaceId: string, limit: number, offset: number): Promise<{ sessions: SessionProjection[]; limit: number; offset: number }> {

@@ -1,8 +1,19 @@
-import { Bot, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2 } from "lucide-react";
+import { Bot, ChevronDown, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles } from "../types";
 
 type SettingsTab = "llm" | "skills" | "mcp";
+
+const API_PROTOCOL_OPTIONS = [
+  { value: "anthropic-messages", label: "Anthropic Messages" },
+  { value: "openai-chat", label: "OpenAI Chat" },
+  { value: "openai-completion", label: "OpenAI Completion" },
+  { value: "azure-chat", label: "Azure Chat" },
+  { value: "google-generative", label: "Google Generative" },
+  { value: "bedrock-converse", label: "Bedrock Converse" },
+  { value: "ollama-chat", label: "Ollama Chat" },
+];
 
 type Props = {
   settingsTab: SettingsTab;
@@ -56,6 +67,60 @@ function Field(props: { label: string; span?: boolean; children: ReactNode }) {
       <span>{props.label}</span>
       {props.children}
     </label>
+  );
+}
+
+function CustomSelect(props: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  const { value, options, onChange } = props;
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selectedLabel = options.find((o) => o.value === value)?.label ?? value;
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  return (
+    <div className="custom-select" ref={ref}>
+      <button
+        type="button"
+        className="custom-select-trigger"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span>{selectedLabel}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <ul className="custom-select-dropdown" role="listbox">
+          {options.map((option) => (
+            <li
+              key={option.value}
+              role="option"
+              aria-selected={option.value === value}
+              className={`custom-select-option ${option.value === value ? "selected" : ""}`}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              {option.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -119,8 +184,13 @@ export function SettingsPanel(props: Props) {
             <PageShell>
               <SectionCard title="连接" description="配置供应商凭证与端点。">
                 <form className="settings-form" onSubmit={onSaveLLM}>
-                  <Field label="供应商"><input value={llmForm.provider} onChange={(e) => setLLMForm({ ...llmForm, provider: e.target.value })} /></Field>
-                  <Field label="API 协议"><input value={llmForm.apiProtocol} onChange={(e) => setLLMForm({ ...llmForm, apiProtocol: e.target.value })} /></Field>
+                  <Field label="API 协议">
+                    <CustomSelect
+                      value={llmForm.apiProtocol}
+                      options={API_PROTOCOL_OPTIONS}
+                      onChange={(value) => setLLMForm({ ...llmForm, apiProtocol: value })}
+                    />
+                  </Field>
                   <Field label="Base URL" span><input value={llmForm.baseUrl} onChange={(e) => setLLMForm({ ...llmForm, baseUrl: e.target.value })} placeholder="http://example.local:8084" /></Field>
                   <Field label="API key" span><input value={llmForm.apiKey} onChange={(e) => setLLMForm({ ...llmForm, apiKey: e.target.value })} type="password" placeholder={llmConnection ? "更新时必填" : "必填"} /></Field>
                   <div className="settings-form-footer">

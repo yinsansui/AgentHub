@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { errorMessage, sessionStorageKey } from "./lib/utils";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useSessionList } from "./hooks/useSessionList";
+import { useWorkspaceList } from "./hooks/useWorkspaceList";
 import { useChat } from "./hooks/useChat";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { ChatPanel } from "./components/ChatPanel";
@@ -27,6 +28,7 @@ export default function App() {
 
   const workspace = useWorkspace(workspaceId);
   const sessions = useSessionList(workspaceId);
+  const workspaceList = useWorkspaceList();
 
   const reportError = useCallback(
     (error: unknown, fallback: string) => {
@@ -35,7 +37,11 @@ export default function App() {
     [workspace.setNotice]
   );
 
-  const chat = useChat(workspaceId, reportError);
+  const handleSessionCreated = useCallback((session: { sessionId: string; taskId: string; workspaceId: string; modelId?: string; title?: string }) => {
+    sessions.prependSession(session);
+  }, [sessions]);
+
+  const chat = useChat(workspaceId, reportError, handleSessionCreated);
 
   useEffect(() => {
     if (workspace.notice?.tone !== "success") return;
@@ -62,6 +68,14 @@ export default function App() {
     setWorkspaceId(next);
     const url = new URL(window.location.href);
     url.searchParams.set("workspaceId", next);
+    window.history.replaceState(null, "", url);
+  }
+
+  function handleSelectWorkspace(nextId: string) {
+    setWorkspaceId(nextId);
+    setWorkspaceDraft(nextId);
+    const url = new URL(window.location.href);
+    url.searchParams.set("workspaceId", nextId);
     window.history.replaceState(null, "", url);
   }
 
@@ -128,8 +142,14 @@ export default function App() {
             workspaceDraft={workspaceDraft}
             setWorkspaceDraft={setWorkspaceDraft}
             onWorkspaceSubmit={handleWorkspaceSubmit}
+            workspaces={workspaceList.workspaces}
+            workspacesLoading={workspaceList.loading}
+            onLoadWorkspaces={workspaceList.loadWorkspaces}
+            onSelectWorkspace={handleSelectWorkspace}
             sessionList={sessions.sessionList}
             sessionListHasMore={sessions.sessionListHasMore}
+            sessionListLoading={sessions.loading}
+            sessionListError={sessions.error}
             activeSessionId={chat.workbench.sessionId}
             onLoadSession={handleLoadSession}
             onLoadMore={() => void sessions.loadMoreSessions()}

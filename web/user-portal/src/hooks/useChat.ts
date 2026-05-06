@@ -16,7 +16,8 @@ const SSE_EVENTS = [
 
 export function useChat(
   workspaceId: string,
-  onError: (error: unknown, fallback: string) => void
+  onError: (error: unknown, fallback: string) => void,
+  onSessionCreated?: (session: { sessionId: string; taskId: string; workspaceId: string; modelId?: string; title?: string }) => void
 ) {
   const [workbench, setWorkbench] = useState<WorkbenchState>({
     workspaceId,
@@ -151,6 +152,7 @@ export function useChat(
           activeRun: response.run ?? null
         }));
         sessionStorage.setItem(sessionStorageKey(workspaceId), response.session.sessionId);
+        onSessionCreated?.(response.session);
         await loadSession(response.session.sessionId);
       } else {
         const response = await createTurn(workbench.sessionId, message);

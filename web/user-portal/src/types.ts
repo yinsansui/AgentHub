@@ -192,3 +192,12 @@ export type MCPServerDefinitionWithEnv = {
   definition: MCPServerDefinition;
   env: MCPServerEnv[];
 };
+
+export type WorkspaceProjection = {
+  workspaceId: string;
+  name?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+};
