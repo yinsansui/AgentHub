@@ -31,6 +31,11 @@ const (
 
 type EventStore interface {
 	Ping(ctx context.Context) error
+	ListWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error)
+	CreateWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error)
+	GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error)
+	UpdateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error)
+	DeleteWorkspace(ctx context.Context, workspaceID string) (bool, error)
 	SaveWorkspaceToken(ctx context.Context, workspaceID string, token string) error
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
@@ -85,6 +90,15 @@ type TaskProjection struct {
 	WorkspaceID string    `json:"workspaceId"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type WorkspaceProjection struct {
+	WorkspaceID string         `json:"workspaceId"`
+	Name        string         `json:"name,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
 }
 
 type SessionProjection struct {
@@ -215,6 +229,7 @@ type ActiveRunConflict struct {
 }
 
 var ErrSessionNotFound = errors.New("session not found")
+var ErrWorkspaceExists = errors.New("workspace already exists")
 
 func (e *ActiveRunConflict) Error() string {
 	return "session already has an active run"
@@ -246,10 +261,17 @@ func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
-  pod_token TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pod_token TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE workspaces ALTER COLUMN pod_token SET DEFAULT '';
 CREATE TABLE IF NOT EXISTS session_events (
   id BIGSERIAL PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -417,6 +439,26 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (s *Store) ListWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error) {
+	return s.listWorkspaces(ctx, limit, offset)
+}
+
+func (s *Store) CreateWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error) {
+	return s.createWorkspace(ctx, workspace)
+}
+
+func (s *Store) GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error) {
+	return s.getWorkspace(ctx, workspaceID)
+}
+
+func (s *Store) UpdateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error) {
+	return s.updateWorkspace(ctx, workspaceID, workspace)
+}
+
+func (s *Store) DeleteWorkspace(ctx context.Context, workspaceID string) (bool, error) {
+	return s.deleteWorkspace(ctx, workspaceID)
+}
+
 func (s *Store) SaveWorkspaceToken(ctx context.Context, workspaceID string, token string) error {
 	_, err := s.pool.Exec(ctx, `
 INSERT INTO workspaces (id, pod_token, updated_at)
@@ -434,6 +476,9 @@ func (s *Store) WorkspaceToken(ctx context.Context, workspaceID string) (string,
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if token == "" {
+		return "", false, nil
 	}
 	return token, true, nil
 }

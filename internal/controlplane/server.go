@@ -50,6 +50,11 @@ func NewServer(config Config) *Server {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)
+	mux.HandleFunc("POST /workspaces", s.handleCreateWorkspace)
+	mux.HandleFunc("GET /workspaces/{workspaceId}", s.handleGetWorkspace)
+	mux.HandleFunc("PUT /workspaces/{workspaceId}", s.handleUpdateWorkspace)
+	mux.HandleFunc("DELETE /workspaces/{workspaceId}", s.handleDeleteWorkspace)
 	mux.HandleFunc("POST /workspaces/{workspaceId}/start", s.handleStartWorkspace)
 	mux.HandleFunc("POST /workspaces/{workspaceId}/stop", s.handleStopWorkspace)
 	mux.HandleFunc("GET /workspaces/{workspaceId}/pod", s.handleInspectWorkspace)

@@ -14,7 +14,8 @@ import (
 type MemoryStore struct {
 	mu             sync.RWMutex
 	nextEventID    int64
-	workspace      map[string]string
+	workspaces     map[string]WorkspaceProjection
+	workspaceToken map[string]string
 	events         map[string][]StoredEvent
 	messages       map[string]map[string]MessageProjection
 	order          map[string][]string
@@ -30,7 +31,8 @@ type MemoryStore struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		workspace:      map[string]string{},
+		workspaces:     map[string]WorkspaceProjection{},
+		workspaceToken: map[string]string{},
 		events:         map[string][]StoredEvent{},
 		messages:       map[string]map[string]MessageProjection{},
 		order:          map[string][]string{},
@@ -47,17 +49,98 @@ func NewMemoryStore() *MemoryStore {
 
 func (s *MemoryStore) Ping(ctx context.Context) error { return nil }
 
+func (s *MemoryStore) ListWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	all := make([]WorkspaceProjection, 0, len(s.workspaces))
+	for _, workspace := range s.workspaces {
+		all = append(all, cloneWorkspaceProjection(workspace))
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].UpdatedAt.Equal(all[j].UpdatedAt) {
+			return all[i].WorkspaceID < all[j].WorkspaceID
+		}
+		return all[i].UpdatedAt.After(all[j].UpdatedAt)
+	})
+	if offset >= len(all) {
+		return []WorkspaceProjection{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
+func (s *MemoryStore) CreateWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.workspaces[workspace.WorkspaceID]; exists {
+		return WorkspaceProjection{}, ErrWorkspaceExists
+	}
+	now := time.Now().UTC()
+	workspace.CreatedAt = now
+	workspace.UpdatedAt = now
+	workspace.Metadata = cloneMetadata(workspace.Metadata)
+	s.workspaces[workspace.WorkspaceID] = workspace
+	return cloneWorkspaceProjection(workspace), nil
+}
+
+func (s *MemoryStore) GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	workspace, ok := s.workspaces[workspaceID]
+	if !ok {
+		return WorkspaceProjection{}, false, nil
+	}
+	return cloneWorkspaceProjection(workspace), true, nil
+}
+
+func (s *MemoryStore) UpdateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.workspaces[workspaceID]
+	if !ok {
+		return WorkspaceProjection{}, false, nil
+	}
+	existing.Name = workspace.Name
+	existing.Description = workspace.Description
+	existing.Metadata = cloneMetadata(workspace.Metadata)
+	existing.UpdatedAt = time.Now().UTC()
+	s.workspaces[workspaceID] = existing
+	return cloneWorkspaceProjection(existing), true, nil
+}
+
+func (s *MemoryStore) DeleteWorkspace(ctx context.Context, workspaceID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.workspaces[workspaceID]; !ok {
+		return false, nil
+	}
+	delete(s.workspaces, workspaceID)
+	delete(s.workspaceToken, workspaceID)
+	return true, nil
+}
+
 func (s *MemoryStore) SaveWorkspaceToken(ctx context.Context, workspaceID, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.workspace[workspaceID] = token
+	s.workspaceToken[workspaceID] = token
+	if _, ok := s.workspaces[workspaceID]; !ok {
+		now := time.Now().UTC()
+		s.workspaces[workspaceID] = WorkspaceProjection{WorkspaceID: workspaceID, Metadata: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+		return nil
+	}
+	workspace := s.workspaces[workspaceID]
+	workspace.UpdatedAt = time.Now().UTC()
+	s.workspaces[workspaceID] = workspace
 	return nil
 }
 
 func (s *MemoryStore) WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	token, ok := s.workspace[workspaceID]
+	token, ok := s.workspaceToken[workspaceID]
 	return token, ok, nil
 }
 
@@ -564,6 +647,11 @@ func cloneMetadata(metadata map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func cloneWorkspaceProjection(workspace WorkspaceProjection) WorkspaceProjection {
+	workspace.Metadata = cloneMetadata(workspace.Metadata)
+	return workspace
 }
 
 func cloneSkillWithFiles(skill SkillDefinitionWithFiles) SkillDefinitionWithFiles {

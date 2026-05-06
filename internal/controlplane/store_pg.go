@@ -152,6 +152,119 @@ ORDER BY m.created_at ASC, m.message_id ASC, b.block_index ASC
 	return messages, rows.Err()
 }
 
+func (s *Store) listWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, name, description, metadata, created_at, updated_at
+FROM workspaces
+ORDER BY updated_at DESC, id ASC
+LIMIT $1 OFFSET $2
+`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	workspaces := []WorkspaceProjection{}
+	for rows.Next() {
+		workspace, err := scanWorkspace(rows)
+		if err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, workspace)
+	}
+	return workspaces, rows.Err()
+}
+
+func (s *Store) createWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error) {
+	payload, err := json.Marshal(cloneMetadata(workspace.Metadata))
+	if err != nil {
+		return WorkspaceProjection{}, err
+	}
+	row := s.pool.QueryRow(ctx, `
+INSERT INTO workspaces (id, name, description, metadata, updated_at)
+VALUES ($1, $2, $3, $4::jsonb, now())
+RETURNING id, name, description, metadata, created_at, updated_at
+`, workspace.WorkspaceID, workspace.Name, workspace.Description, payload)
+	saved, err := scanWorkspace(row)
+	if isUniqueViolation(err) {
+		return WorkspaceProjection{}, ErrWorkspaceExists
+	}
+	return saved, err
+}
+
+func (s *Store) getWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error) {
+	workspace, err := scanWorkspace(s.pool.QueryRow(ctx, `
+SELECT id, name, description, metadata, created_at, updated_at
+FROM workspaces
+WHERE id = $1
+`, workspaceID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceProjection{}, false, nil
+	}
+	if err != nil {
+		return WorkspaceProjection{}, false, err
+	}
+	return workspace, true, nil
+}
+
+func (s *Store) updateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error) {
+	payload, err := json.Marshal(cloneMetadata(workspace.Metadata))
+	if err != nil {
+		return WorkspaceProjection{}, false, err
+	}
+	saved, err := scanWorkspace(s.pool.QueryRow(ctx, `
+UPDATE workspaces
+SET name = $2, description = $3, metadata = $4::jsonb, updated_at = now()
+WHERE id = $1
+RETURNING id, name, description, metadata, created_at, updated_at
+`, workspaceID, workspace.Name, workspace.Description, payload))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceProjection{}, false, nil
+	}
+	if err != nil {
+		return WorkspaceProjection{}, false, err
+	}
+	return saved, true, nil
+}
+
+func (s *Store) deleteWorkspace(ctx context.Context, workspaceID string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM workspaces WHERE id = $1`, workspaceID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+type workspaceScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanWorkspace(row workspaceScanner) (WorkspaceProjection, error) {
+	var workspace WorkspaceProjection
+	var metadata []byte
+	if err := row.Scan(
+		&workspace.WorkspaceID,
+		&workspace.Name,
+		&workspace.Description,
+		&metadata,
+		&workspace.CreatedAt,
+		&workspace.UpdatedAt,
+	); err != nil {
+		return WorkspaceProjection{}, err
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &workspace.Metadata)
+	}
+	if workspace.Metadata == nil {
+		workspace.Metadata = map[string]any{}
+	}
+	return workspace, nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func (s *Store) createSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error) {
 	if req.Metadata == nil {
 		req.Metadata = map[string]any{}
