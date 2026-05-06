@@ -10,3 +10,9 @@ runtimes/ts-runtime-host/dist/
 # User portal frontend artifacts
 web/user-portal/node_modules/
 web/user-portal/dist/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Sisyphus run artifacts
+.sisyphus/
