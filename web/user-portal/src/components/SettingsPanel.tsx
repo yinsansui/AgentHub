@@ -1,4 +1,4 @@
-import { FileText, Play, Plus, RefreshCw, Save, ScrollText, Server, Trash2 } from "lucide-react";
+import { FileText, Plus, RefreshCw, Save, ScrollText, Server, Trash2 } from "lucide-react";
 import type { FormEvent } from "react";
 import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, PodInfo, SkillDefinitionWithFiles } from "../types";
 import type { Notice } from "../hooks/useWorkspace";
@@ -15,7 +15,6 @@ type Props = {
   showLogs: boolean;
   workspaceId: string;
   onRefreshWorkspace: () => void;
-  onStartPod: () => void;
   onLoadLogs: () => void;
   llmConnection: LLMConnection | null;
   llmForm: { provider: string; apiProtocol: string; baseUrl: string; apiKey: string };
@@ -49,7 +48,7 @@ export function SettingsPanel(props: Props) {
   const {
     settingsTab, setSettingsTab, onBack, notice,
     pod, logs, showLogs, workspaceId,
-    onRefreshWorkspace, onStartPod, onLoadLogs,
+    onRefreshWorkspace, onLoadLogs,
     llmConnection, llmForm, setLLMForm, onSaveLLM,
     models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel,
     skills, skillForm, setSkillForm, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill,
@@ -82,7 +81,6 @@ export function SettingsPanel(props: Props) {
             <div className="min-h-0 grid content-start gap-3.5 px-5 pt-[18px] pb-[22px]">
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={() => void onRefreshWorkspace()}><RefreshCw size={14} />Refresh</button>
-                <button type="button" onClick={() => void onStartPod()}><Play size={14} />Start workspace</button>
                 <button type="button" onClick={() => void onLoadLogs()}><ScrollText size={14} />Logs</button>
               </div>
               <dl className="grid gap-[7px] m-0 rounded-xl p-3.5 bg-black/[0.03] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.07)] [&_div]:grid [&_div]:gap-[3px] [&_dd]:m-0 [&_dd]:overflow-wrap-anywhere [&_dd]:text-[13px]">

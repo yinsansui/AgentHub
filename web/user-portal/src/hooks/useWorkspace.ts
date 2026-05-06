@@ -15,7 +15,6 @@ import {
   saveLLMConnection,
   saveMCPServer,
   saveSkill,
-  startPod,
   upsertModel
 } from "../api";
 import { errorMessage, replaceBy, lines, envMap } from "../lib/utils";
@@ -108,16 +107,6 @@ export function useWorkspace(workspaceId: string) {
       reportError(error, "加载 workspace 失败");
     }
   }, [reportError, workspaceId]);
-
-  async function handleStartPod() {
-    try {
-      const payload = await startPod(workspaceId);
-      setPod(payload.pod);
-      setNotice({ tone: "success", text: "工作区已启动" });
-    } catch (error) {
-      reportError(error, "启动工作区失败");
-    }
-  }
 
   async function handleLoadLogs() {
     try {
@@ -273,7 +262,7 @@ export function useWorkspace(workspaceId: string) {
     skills, skillForm, setSkillForm, skillEditorOpen,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen,
     refreshWorkspace,
-    handleStartPod, handleLoadLogs,
+    handleLoadLogs,
     handleSaveLLM, handleRefreshModels, handleUpsertModel, handleManualModel,
     handleNewSkill, handleLoadSkill, handleSaveSkill, handleDeleteSkill,
     handleNewMCP, handleLoadMCP, handleSaveMCP, handleDeleteMCP

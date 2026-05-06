@@ -55,7 +55,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /workspaces/{workspaceId}", s.handleGetWorkspace)
 	mux.HandleFunc("PUT /workspaces/{workspaceId}", s.handleUpdateWorkspace)
 	mux.HandleFunc("DELETE /workspaces/{workspaceId}", s.handleDeleteWorkspace)
-	mux.HandleFunc("POST /workspaces/{workspaceId}/start", s.handleStartWorkspace)
 	mux.HandleFunc("POST /workspaces/{workspaceId}/stop", s.handleStopWorkspace)
 	mux.HandleFunc("GET /workspaces/{workspaceId}/pod", s.handleInspectWorkspace)
 	mux.HandleFunc("GET /workspaces/{workspaceId}/logs", s.handleWorkspaceLogs)
@@ -93,33 +92,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-func (s *Server) handleStartWorkspace(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
-	var req driver.AgentPodSpec
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	req.WorkspaceID = workspaceID
+func (s *Server) ensureWorkspaceStarted(ctx context.Context, workspaceID string) (string, driver.AgentPodInfo, error) {
+	req := driver.AgentPodSpec{WorkspaceID: workspaceID}
 	if req.Token == "" {
 		token, err := driver.NewToken()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return "", driver.AgentPodInfo{}, err
 		}
 		req.Token = token
 	}
-	info, err := s.driver.Start(r.Context(), req)
+	info, err := s.driver.Start(ctx, req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return "", driver.AgentPodInfo{}, err
 	}
 	if s.config.DatabaseURL != "" {
-		if err := s.store.SaveWorkspaceToken(r.Context(), workspaceID, req.Token); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if err := s.store.SaveWorkspaceToken(ctx, workspaceID, req.Token); err != nil {
+			return "", driver.AgentPodInfo{}, err
 		}
 	} else {
 		s.setToken(workspaceID, req.Token)
 	}
-	writeJSON(w, map[string]any{"pod": info, "tokenStored": true})
+	return req.Token, info, nil
 }
 
 func (s *Server) handleStopWorkspace(w http.ResponseWriter, r *http.Request) {

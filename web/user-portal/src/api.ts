@@ -54,13 +54,6 @@ export async function getPod(workspaceId: string): Promise<PodInfo> {
   return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/pod`);
 }
 
-export async function startPod(workspaceId: string): Promise<{ pod: PodInfo; tokenStored: boolean }> {
-  return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/start`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
-}
-
 export async function getWorkspaceLogs(workspaceId: string, tail = 100): Promise<string> {
   return apiRequestText(`/workspaces/${encodeURIComponent(workspaceId)}/logs?tail=${tail}`);
 }

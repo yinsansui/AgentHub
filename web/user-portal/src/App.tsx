@@ -80,7 +80,6 @@ export default function App() {
         showLogs={workspace.showLogs}
         workspaceId={workspaceId}
         onRefreshWorkspace={workspace.refreshWorkspace}
-        onStartPod={workspace.handleStartPod}
         onLoadLogs={workspace.handleLoadLogs}
         llmConnection={workspace.llmConnection}
         llmForm={workspace.llmForm}

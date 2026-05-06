@@ -134,7 +134,7 @@ docker run -d --name agenthub-control-plane --network agenthub \
   -v "$PWD/.agenthub:/data" \
   agenthub-control-plane:dev
 
-curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/start -d '{}'
+# 创建 session 时后端会自动启动 workspace agent-pod，无需显式调用 /start。
 SESSION_ID=$(curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
   -H 'content-type: application/json' \
   -d '{"firstTurn":{"message":"hello"}}' | jq -r '.session.sessionId')

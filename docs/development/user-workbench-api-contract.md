@@ -49,44 +49,14 @@ workspace 准备
 | 功能 | 接口 | 说明 |
 | --- | --- | --- |
 | 健康检查 | `GET /health` | control-plane 可用性；DB 配置存在时也检查 DB ping。 |
-| 启动 workspace pod | `POST /workspaces/{workspaceId}/start` | 当前创建 session 前必须有 active agent-pod token。普通用户页可以在进入 workspace 时自动调用或提供“启动工作区”。 |
+| workspace pod 默认启动 | 创建 session / turn 时自动 ensure | 不向普通用户暴露显式 start；后端在需要执行前自动启动 agent-pod 并保存 token。 |
 | 查看 workspace pod | `GET /workspaces/{workspaceId}/pod` | 用于展示 pod status，例如 `running` / `not_found`。 |
 | 停止 workspace pod | `POST /workspaces/{workspaceId}/stop` | 普通用户 MVP 可不暴露，或放到高级操作。 |
 | 查看日志 | `GET /workspaces/{workspaceId}/logs?tail=100` | 普通用户 MVP 可不暴露，调试面板可用。返回 `text/plain`。 |
 
-#### `POST /workspaces/{workspaceId}/start`
+#### 默认启动行为
 
-请求体来自 `AgentPodSpec`，多数情况下可以传 `{}`：
-
-```json
-{}
-```
-
-可选字段：
-
-```json
-{
-  "workspacePath": "/host/path/to/workspace",
-  "image": "agenthub-agent-pod:dev",
-  "network": "agenthub"
-}
-```
-
-响应：
-
-```json
-{
-  "pod": {
-    "workspaceId": "ws_dev",
-    "name": "agent-pod-ws_dev",
-    "image": "agenthub-agent-pod:dev",
-    "network": "agenthub",
-    "status": "running",
-    "endpoint": "http://agent-pod-ws_dev:3001"
-  },
-  "tokenStored": true
-}
-```
+`POST /workspaces/{workspaceId}/sessions` 和 `POST /sessions/{sessionId}/turns` 会在执行前自动确保 workspace agent-pod 已启动并保存执行 token；前端不需要、也不应该调用显式 start 接口。
 
 #### `GET /workspaces/{workspaceId}/pod`
 
@@ -446,7 +416,7 @@ MCP 与 skill 来源保持一致，当前前端只需要处理 workspace source�
 | HTTP | 场景 | 前端处理 |
 | --- | --- | --- |
 | 400 | `firstTurn.message is required` / model 未启用 / LLM 未配置 | 提示用户补配置或输入。 |
-| 409 | workspace 没有 active pod token | 引导调用 `/workspaces/{workspaceId}/start`。 |
+| 409 | active run 冲突等业务冲突 | 按响应错误提示处理；workspace pod/token 由后端自动准备。 |
 | 500 | prepare session / runtime 启动异常 | 展示错误，并可提供 logs 入口。 |
 
 ### 6.3 `POST /sessions/{sessionId}/turns`
@@ -897,7 +867,6 @@ type WorkbenchState = {
 ### P0：聊天闭环
 
 - `/health`
-- `/workspaces/{workspaceId}/start`
 - `/workspaces/{workspaceId}/pod`
 - `/workspaces/{workspaceId}/llm-connection`
 - `/workspaces/{workspaceId}/llm-models`

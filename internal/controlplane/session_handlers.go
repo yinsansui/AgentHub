@@ -39,9 +39,9 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 	}
 	req.ModelID = modelID
 
-	token, ok := s.workspaceExecutionToken(r.Context(), workspaceID)
-	if !ok {
-		http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
+	token, err := s.ensureWorkspaceExecutionToken(r.Context(), workspaceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	skills, err := s.resolveSessionSkills(r.Context(), workspaceID)
@@ -110,9 +110,9 @@ func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	token, ok := s.workspaceExecutionToken(r.Context(), session.WorkspaceID)
-	if !ok {
-		http.Error(w, "workspace has no active agent-pod token; call /workspaces/{id}/start first", http.StatusConflict)
+	token, err := s.ensureWorkspaceExecutionToken(r.Context(), session.WorkspaceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -247,6 +247,14 @@ func (s *Server) workspaceExecutionToken(ctx context.Context, workspaceID string
 		return s.config.DevAgentPodToken, true
 	}
 	return token, ok
+}
+
+func (s *Server) ensureWorkspaceExecutionToken(ctx context.Context, workspaceID string) (string, error) {
+	if token, ok := s.workspaceExecutionToken(ctx, workspaceID); ok {
+		return token, nil
+	}
+	token, _, err := s.ensureWorkspaceStarted(ctx, workspaceID)
+	return token, err
 }
 
 func turnRequestFromFirstTurn(workspaceID, taskID, sessionID string, firstTurn *protocol.FirstTurnRequest) protocol.TurnRequest {
