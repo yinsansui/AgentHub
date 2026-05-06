@@ -244,9 +244,12 @@
     text-align: left;
   }
 
-  .settings-nav-item span {
-    font-size: 14px;
-    font-weight: 520;
+  .settings-nav-item-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 400;
   }
 
   .settings-nav-item small {
@@ -298,8 +301,8 @@
   .settings-card-header p {
     margin: 0;
     color: var(--color-apple-fg-50);
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: 13px;
+    line-height: 1.5;
   }
 
   .settings-page-actions,
@@ -353,10 +356,10 @@
   .settings-card-header h2 {
     margin: 0 0 5px;
     color: var(--color-apple-fg);
-    font-size: 20px;
-    line-height: 1.15;
-    font-weight: 640;
-    letter-spacing: -0.025em;
+    font-size: 18px;
+    line-height: 1.2;
+    font-weight: 400;
+    letter-spacing: -0.02em;
   }
 
   .settings-definition-grid {
@@ -380,10 +383,10 @@
   .settings-definition-grid dt {
     margin-bottom: 5px;
     color: var(--color-apple-fg-50);
-    font-size: 11px;
-    font-weight: 650;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .settings-definition-grid dd {
@@ -442,10 +445,10 @@
     gap: 7px;
     min-width: 0;
     color: var(--color-apple-fg-50);
-    font-size: 11px;
-    font-weight: 650;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .settings-field-span,
@@ -568,6 +571,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--color-apple-fg);
+    font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }

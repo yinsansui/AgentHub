@@ -1,4 +1,4 @@
-import { FileText, Plus, RefreshCw, Save, Server, Trash2 } from "lucide-react";
+import { Bot, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2 } from "lucide-react";
 import type { FormEvent, ReactNode } from "react";
 import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles } from "../types";
 
@@ -41,12 +41,13 @@ type Props = {
 type SettingsTabMeta = {
   tab: SettingsTab;
   label: string;
+  icon: ReactNode;
 };
 
 const settingsTabs: SettingsTabMeta[] = [
-  { tab: "llm", label: "LLM" },
-  { tab: "skills", label: "Skill" },
-  { tab: "mcp", label: "MCP" }
+  { tab: "llm", label: "LLM", icon: <Bot size={16} /> },
+  { tab: "skills", label: "Skill", icon: <Puzzle size={16} /> },
+  { tab: "mcp", label: "MCP", icon: <Server size={16} /> }
 ];
 
 function Field(props: { label: string; span?: boolean; children: ReactNode }) {
@@ -105,7 +106,10 @@ export function SettingsPanel(props: Props) {
                 className={`settings-nav-item ${settingsTab === item.tab ? "active" : ""}`}
                 onClick={() => setSettingsTab(item.tab)}
               >
-                <span>{item.label}</span>
+                <span className="settings-nav-item-label">
+                  {item.icon}
+                  {item.label}
+                </span>
               </button>
             ))}
           </div>
