@@ -198,7 +198,8 @@ func (s *Server) startTurnForSession(ctx context.Context, workspaceID, token str
 }
 
 func (s *Server) resolveSessionModelID(ctx context.Context, workspaceID, requestedModelID string) (string, error) {
-	if _, ok, err := s.store.GetWorkspaceLLMConnection(ctx, workspaceID); err != nil {
+	connection, ok, err := s.store.GetWorkspaceLLMConnection(ctx, workspaceID)
+	if err != nil {
 		return "", err
 	} else if !ok {
 		return "", errors.New("llm connection is not configured")
@@ -216,12 +217,19 @@ func (s *Server) resolveSessionModelID(ctx context.Context, workspaceID, request
 		}
 		return "", errors.New("model is not enabled for this workspace: " + requestedModelID)
 	}
+	defaultModelID := strings.TrimSpace(connection.DefaultModelID)
+	if defaultModelID == "" {
+		return "", errors.New("default llm model is not configured for this workspace")
+	}
 	for _, model := range models {
-		if model.Enabled {
-			return model.ModelID, nil
+		if model.ModelID == defaultModelID {
+			if model.Enabled {
+				return model.ModelID, nil
+			}
+			return "", errors.New("default llm model is disabled for this workspace: " + defaultModelID)
 		}
 	}
-	return "", errors.New("no enabled llm model configured for this workspace")
+	return "", errors.New("default llm model is not enabled for this workspace: " + defaultModelID)
 }
 
 func (s *Server) runtimeEnvForTurn(ctx context.Context, turn protocol.TurnRequest) (map[string]string, error) {

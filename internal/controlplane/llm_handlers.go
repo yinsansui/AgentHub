@@ -18,10 +18,11 @@ const (
 )
 
 type upsertWorkspaceLLMConnectionRequest struct {
-	Provider    string `json:"provider,omitempty"`
-	APIProtocol string `json:"apiProtocol"`
-	BaseURL     string `json:"baseUrl"`
-	APIKey      string `json:"apiKey"`
+	Provider       string  `json:"provider,omitempty"`
+	APIProtocol    string  `json:"apiProtocol"`
+	BaseURL        string  `json:"baseUrl"`
+	APIKey         string  `json:"apiKey"`
+	DefaultModelID *string `json:"defaultModelId,omitempty"`
 }
 
 type upsertWorkspaceLLMModelRequest struct {
@@ -70,7 +71,16 @@ func (s *Server) handlePutWorkspaceLLMConnection(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	connection, err := buildWorkspaceLLMConnection(workspaceID, req)
+	existing, hasExisting, err := s.store.GetWorkspaceLLMConnection(r.Context(), workspaceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var existingConnection *LLMConnection
+	if hasExisting {
+		existingConnection = &existing
+	}
+	connection, err := buildWorkspaceLLMConnection(workspaceID, req, existingConnection)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -125,6 +135,20 @@ func (s *Server) handlePutWorkspaceLLMModel(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if !saved.Enabled {
+		connection, ok, err := s.store.GetWorkspaceLLMConnection(r.Context(), workspaceID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if ok && connection.DefaultModelID == saved.ModelID {
+			connection.DefaultModelID = ""
+			if _, err := s.store.UpsertWorkspaceLLMConnection(r.Context(), workspaceID, connection); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 	writeJSON(w, map[string]any{"model": saved})
 }
@@ -184,34 +208,58 @@ func (s *Server) handleRefreshWorkspaceLLMModels(w http.ResponseWriter, r *http.
 		}
 		saved = append(saved, stored)
 	}
-	writeJSON(w, map[string]any{"models": saved})
+	models, err := s.store.ListWorkspaceLLMModels(r.Context(), workspaceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"models": models})
 }
 
-func buildWorkspaceLLMConnection(workspaceID string, req upsertWorkspaceLLMConnectionRequest) (LLMConnection, error) {
+func buildWorkspaceLLMConnection(workspaceID string, req upsertWorkspaceLLMConnectionRequest, existing *LLMConnection) (LLMConnection, error) {
 	provider := strings.TrimSpace(req.Provider)
 	if provider == "" {
-		provider = defaultLLMProvider
+		if existing != nil && strings.TrimSpace(existing.Provider) != "" {
+			provider = existing.Provider
+		} else {
+			provider = defaultLLMProvider
+		}
 	}
 	apiProtocol := strings.TrimSpace(req.APIProtocol)
 	if apiProtocol == "" {
-		apiProtocol = defaultLLMAPIProtocol
+		if existing != nil && strings.TrimSpace(existing.APIProtocol) != "" {
+			apiProtocol = existing.APIProtocol
+		} else {
+			apiProtocol = defaultLLMAPIProtocol
+		}
 	}
 	baseURL := strings.TrimSpace(req.BaseURL)
 	if baseURL == "" {
 		return LLMConnection{}, errors.New("baseUrl is required")
 	}
 	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" && existing != nil {
+		apiKey = existing.APIKey
+	}
 	if apiKey == "" {
 		return LLMConnection{}, errors.New("apiKey is required")
 	}
+	defaultModelID := ""
+	if existing != nil {
+		defaultModelID = existing.DefaultModelID
+	}
+	if req.DefaultModelID != nil {
+		defaultModelID = strings.TrimSpace(*req.DefaultModelID)
+	}
 	return LLMConnection{
-		ID:          stableDefinitionID("llm_conn", "", workspaceID),
-		UserID:      "",
-		WorkspaceID: workspaceID,
-		Provider:    provider,
-		APIProtocol: apiProtocol,
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
+		ID:             stableDefinitionID("llm_conn", "", workspaceID),
+		UserID:         "",
+		WorkspaceID:    workspaceID,
+		Provider:       provider,
+		APIProtocol:    apiProtocol,
+		BaseURL:        baseURL,
+		APIKey:         apiKey,
+		DefaultModelID: defaultModelID,
 	}, nil
 }
 
