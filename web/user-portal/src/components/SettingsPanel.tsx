@@ -234,7 +234,7 @@ function WorkspaceSettingsCard({
             <div className="settings-form-footer">
               <button
                 type="button"
-                className="settings-delete-button"
+                className="settings-text-delete-button"
                 aria-label="删除 Workspace"
                 onClick={() => { setDeleteOpen(true); setConfirmName(""); setDeleteError(null); }}
               >
@@ -251,10 +251,11 @@ function WorkspaceSettingsCard({
       </SectionCard>
 
       {deleteOpen && activeWorkspace && (
-        <SectionCard title="删除 Workspace" description="此操作将永久删除该 workspace 及其所有数据。">
-          <div className="p-1">
-            <p className="text-[13px] text-apple-fg mb-3">
-              请输入 workspace 名称以确认删除：
+        <div className="settings-modal-overlay" onClick={() => { setDeleteOpen(false); setConfirmName(""); setDeleteError(null); }}>
+          <div className="settings-modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h3>删除 Workspace</h3>
+            <p className="settings-modal-description">
+              此操作将永久删除该 workspace 及其所有数据。请输入 workspace 名称以确认删除：
               <span className="font-medium ml-1">
                 {activeWorkspace.name}
               </span>
@@ -263,14 +264,13 @@ function WorkspaceSettingsCard({
               autoFocus
               value={confirmName}
               onChange={(e) => setConfirmName(e.target.value)}
-              className="w-full text-[13px] px-2.5 py-[7px] rounded-lg bg-apple-bg shadow-none border border-black/[0.08] mb-2"
               placeholder="输入 workspace 名称"
             />
-            {deleteError && <p className="text-apple-destructive-text text-[12px] mb-2">{deleteError}</p>}
-            <div className="flex items-center justify-end gap-2">
+            {deleteError && <p className="settings-modal-error">{deleteError}</p>}
+            <div className="settings-modal-actions">
               <button
                 type="button"
-                className="min-h-7 px-2.5 py-0 text-[12px] bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 rounded-lg"
+                className="settings-modal-cancel"
                 onClick={() => { setDeleteOpen(false); setConfirmName(""); setDeleteError(null); }}
               >
                 取消
@@ -279,14 +279,14 @@ function WorkspaceSettingsCard({
                 type="button"
                 disabled={deleteLoading}
                 aria-label="确认删除 Workspace"
-                className="min-h-7 px-2.5 py-0 text-[12px] bg-apple-destructive text-white shadow-none hover:opacity-90 rounded-lg"
+                className="settings-modal-confirm"
                 onClick={handleDeleteConfirm}
               >
                 {deleteLoading ? "删除中…" : "删除"}
               </button>
             </div>
           </div>
-        </SectionCard>
+        </div>
       )}
     </PageShell>
   );
