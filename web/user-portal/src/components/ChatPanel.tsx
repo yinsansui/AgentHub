@@ -7,6 +7,7 @@ import { MessageBubble } from "./MessageBubble";
 type Props = {
   workbench: WorkbenchState;
   enabledModels: LLMModel[];
+  defaultModelId?: string;
   messageDraft: string;
   setMessageDraft: (v: string) => void;
   selectedModelId: string;
@@ -20,11 +21,15 @@ function ModelDropdown({
   onChange,
   options,
   disabled,
+  defaultModelId,
+  lockedModelId,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: LLMModel[];
   disabled: boolean;
+  defaultModelId?: string;
+  lockedModelId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -35,13 +40,15 @@ function ModelDropdown({
 
   const allOptions = useMemo(
     () => [
-      { label: "默认 model", value: "" },
+      ...(defaultModelId ? [{ label: `默认：${defaultModelId}`, value: "" }] : []),
       ...options.map((m) => ({ label: m.modelId, value: m.modelId })),
     ],
-    [options]
+    [options, defaultModelId]
   );
 
-  const selectedLabel = allOptions.find((o) => o.value === value)?.label ?? "默认 model";
+  const selectedLabel = lockedModelId
+    ? lockedModelId
+    : allOptions.find((o) => o.value === value)?.label ?? (defaultModelId ? `默认：${defaultModelId}` : "选择模型");
 
   const handleOpen = useCallback(() => {
     if (disabled) return;
@@ -181,12 +188,18 @@ function ModelDropdown({
 }
 
 export function ChatPanel({
-  workbench, enabledModels,
+  workbench, enabledModels, defaultModelId,
   messageDraft, setMessageDraft,
   selectedModelId, setSelectedModelId,
   onSubmit
 }: Props) {
-  const canSend = messageDraft.trim() !== "" && !workbench.activeRun;
+  const hasModel = workbench.sessionId
+    ? Boolean(workbench.modelId)
+    : Boolean(defaultModelId || selectedModelId);
+  const canSend = messageDraft.trim() !== "" && !workbench.activeRun && hasModel;
+  const modelHint = enabledModels.length === 0
+    ? "请先在设置中配置并启用至少一个模型"
+    : "请选择一个模型，或在设置中设为默认模型";
 
   return (
     <>
@@ -227,12 +240,17 @@ export function ChatPanel({
                 onChange={setSelectedModelId}
                 options={enabledModels}
                 disabled={Boolean(workbench.sessionId)}
+                defaultModelId={defaultModelId}
+                lockedModelId={workbench.sessionId ? workbench.modelId : undefined}
               />
             </div>
             <button type="submit" className="w-8 h-8 min-h-8 p-0 rounded-full bg-apple-accent shadow-none text-white transition-opacity duration-[120ms] ease-out hover:bg-apple-accent-hover hover:text-white disabled:bg-black/15 disabled:text-black/35 disabled:opacity-100" disabled={!canSend} aria-label="发送">
               <ArrowUp size={16} />
             </button>
           </div>
+          {!hasModel && !workbench.sessionId && (
+            <p className="text-[12px] text-apple-fg-50 -mt-1">{modelHint}</p>
+          )}
         </div>
       </form>
     </>

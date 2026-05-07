@@ -164,6 +164,7 @@ export default function App() {
           setSettingsTab={setSettingsTab}
           onBack={() => setActivePanel("sessions")}
           llmConnection={workspace.llmConnection}
+          apiKeySet={workspace.apiKeySet}
           llmForm={workspace.llmForm}
           setLLMForm={workspace.setLLMForm}
           onSaveLLM={workspace.handleSaveLLM}
@@ -173,6 +174,7 @@ export default function App() {
           onRefreshModels={workspace.handleRefreshModels}
           onUpsertModel={workspace.handleUpsertModel}
           onManualModel={workspace.handleManualModel}
+          onSetDefaultModel={workspace.handleSetDefaultModel}
           skills={workspace.skills}
           skillForm={workspace.skillForm}
           setSkillForm={workspace.setSkillForm}
@@ -200,6 +202,9 @@ export default function App() {
   }
 
   const enabledModels = workspace.models.filter((m) => m.enabled);
+  const defaultModelId = enabledModels.some((m) => m.modelId === workspace.llmConnection?.defaultModelId)
+    ? workspace.llmConnection?.defaultModelId
+    : undefined;
 
   return (
     <>
@@ -230,6 +235,7 @@ export default function App() {
           <ChatPanel
             workbench={chat.workbench}
             enabledModels={enabledModels}
+            defaultModelId={defaultModelId}
             messageDraft={chat.messageDraft}
             setMessageDraft={chat.setMessageDraft}
             selectedModelId={chat.selectedModelId}

@@ -20,6 +20,7 @@ type Props = {
   setSettingsTab: (tab: SettingsTab) => void;
   onBack: () => void;
   llmConnection: LLMConnection | null;
+  apiKeySet: boolean;
   llmForm: { provider: string; apiProtocol: string; baseUrl: string; apiKey: string };
   setLLMForm: (v: { provider: string; apiProtocol: string; baseUrl: string; apiKey: string }) => void;
   onSaveLLM: (e: FormEvent) => void;
@@ -29,6 +30,7 @@ type Props = {
   onRefreshModels: () => void;
   onUpsertModel: (modelId: string, enabled: boolean, source?: string) => void;
   onManualModel: (e: FormEvent) => void;
+  onSetDefaultModel: (modelId: string) => void;
   skills: SkillDefinitionWithFiles[];
   skillForm: { slug: string; name: string; description: string; path: string; content: string };
   setSkillForm: (v: { slug: string; name: string; description: string; path: string; content: string }) => void;
@@ -114,7 +116,9 @@ function CustomSelect(props: {
               role="option"
               aria-selected={option.value === value}
               className={`custom-select-option ${option.value === value ? "selected" : ""}`}
-              onClick={() => {
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 onChange(option.value);
                 setOpen(false);
               }}
@@ -295,8 +299,8 @@ function WorkspaceSettingsCard({
 export function SettingsPanel(props: Props) {
   const {
     settingsTab, setSettingsTab, onBack,
-    llmConnection, llmForm, setLLMForm, onSaveLLM,
-    models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel,
+    llmConnection, apiKeySet, llmForm, setLLMForm, onSaveLLM,
+    models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel, onSetDefaultModel,
     skills, skillForm, setSkillForm, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen, onNewMCP, onLoadMCP, onSaveMCP, onDeleteMCP, onCloseMCPEditor,
     activeWorkspace, onUpdateWorkspace, onDeleteWorkspace
@@ -337,17 +341,19 @@ export function SettingsPanel(props: Props) {
                     />
                   </Field>
                   <Field label="Base URL" span><input value={llmForm.baseUrl} onChange={(e) => setLLMForm({ ...llmForm, baseUrl: e.target.value })} placeholder="http://example.local:8084" /></Field>
-                  <Field label="API key" span><input value={llmForm.apiKey} onChange={(e) => setLLMForm({ ...llmForm, apiKey: e.target.value })} type="password" placeholder={llmConnection ? "更新时必填" : "必填"} /></Field>
+                  <Field label="API key" span>
+                    <input value={llmForm.apiKey} onChange={(e) => setLLMForm({ ...llmForm, apiKey: e.target.value })} type="password" placeholder={apiKeySet ? "留空保留现有密钥" : "必填"} />
+                  </Field>
                   <div className="settings-form-footer">
-                    <span>{llmConnection ? "已检测到现有连接。API key 仅在编辑时显示。" : "尚未保存连接。"}</span>
+                    <span>{apiKeySet ? "已保存密钥。留空保留现有密钥，填写则替换。" : "尚未保存连接。"}</span>
                     <button type="submit" className="settings-primary-button"><Save size={14} />保存连接</button>
                   </div>
                 </form>
               </SectionCard>
               <SectionCard
                 title="模型"
-                description="仅启用当前 Workspace 需要暴露的 modelId。"
-                actions={<button type="button" onClick={() => void onRefreshModels()}><RefreshCw size={14} />刷新</button>}
+                description="启用模型并设置默认。新会话使用默认模型。"
+                actions={<button type="button" onClick={() => void onRefreshModels()} disabled={!llmConnection}><RefreshCw size={14} />刷新</button>}
               >
                 <form className="settings-inline-form" onSubmit={onManualModel}>
                   <input className="min-w-0" value={manualModelId} onChange={(e) => setManualModelId(e.target.value)} placeholder="modelId" />
@@ -359,9 +365,22 @@ export function SettingsPanel(props: Props) {
                       <input type="checkbox" checked={model.enabled} onChange={(e) => void onUpsertModel(model.modelId, e.target.checked, model.source)} />
                       <span>{model.modelId}</span>
                       <small>{model.source}</small>
+                      {model.enabled && (
+                        <button
+                          type="button"
+                          className="settings-model-default-radio"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void onSetDefaultModel(llmConnection?.defaultModelId === model.modelId ? "" : model.modelId);
+                          }}
+                          aria-label={llmConnection?.defaultModelId === model.modelId ? "取消默认" : "设为默认"}
+                        >
+                          <span className={`radio-dot ${llmConnection?.defaultModelId === model.modelId ? "active" : ""}`} />
+                        </button>
+                      )}
                     </label>
                   ))}
-                  {models.length === 0 && <p className="empty-copy">未配置模型。</p>}
+                  {models.length === 0 && <p className="empty-copy">未配置模型。先保存连接并刷新。</p>}
                 </div>
               </SectionCard>
             </PageShell>
