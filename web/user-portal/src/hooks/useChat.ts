@@ -100,7 +100,7 @@ export function useChat(
           workspaceId,
           sessionId: state.sessionId,
           taskId: state.activeRun?.taskId,
-          modelId: undefined,
+          modelId: state.modelId,
           messages: state.messages ?? [],
           activeRun: state.activeRun ?? null,
           latestEventId: state.latestEventId ?? 0,
@@ -108,6 +108,7 @@ export function useChat(
         };
         latestEventIdRef.current = next.latestEventId;
         setWorkbench(next);
+        setSelectedModelId(state.modelId || "");
         sessionStorage.setItem(sessionStorageKey(userId, workspaceId), state.sessionId);
         const replay = await getSessionEvents(state.sessionId, next.latestEventId);
         const replayed = replay.events.reduce((c, e) => applyEvent(c, e.payload, e.id), next);
