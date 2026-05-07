@@ -595,7 +595,7 @@ func (s *MemoryStore) RequestRunInterrupt(ctx context.Context, sessionID, expect
 func (s *MemoryStore) SessionState(ctx context.Context, sessionID string) (SessionState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	state := SessionState{SessionID: sessionID}
+	state := SessionState{SessionID: sessionID, ModelID: s.sessions[sessionID].ModelID}
 	state.Messages = make([]MessageProjection, 0, len(s.order[sessionID]))
 	for _, messageID := range s.order[sessionID] {
 		message := s.messages[sessionID][messageID]

@@ -112,15 +112,16 @@ type SessionProjection struct {
 }
 
 type LLMConnection struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"userId"`
-	WorkspaceID string    `json:"workspaceId"`
-	Provider    string    `json:"provider"`
-	APIProtocol string    `json:"apiProtocol"`
-	BaseURL     string    `json:"baseUrl"`
-	APIKey      string    `json:"apiKey,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID             string    `json:"id"`
+	UserID         string    `json:"userId"`
+	WorkspaceID    string    `json:"workspaceId"`
+	Provider       string    `json:"provider"`
+	APIProtocol    string    `json:"apiProtocol"`
+	BaseURL        string    `json:"baseUrl"`
+	APIKey         string    `json:"apiKey,omitempty"`
+	DefaultModelID string    `json:"defaultModelId,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type LLMConnectionModel struct {
@@ -152,6 +153,7 @@ type SessionRun struct {
 
 type SessionState struct {
 	SessionID     string              `json:"sessionId"`
+	ModelID       string              `json:"modelId,omitempty"`
 	Messages      []MessageProjection `json:"messages"`
 	ActiveRun     *SessionRun         `json:"activeRun,omitempty"`
 	LatestEventID int64               `json:"latestEventId"`
@@ -348,9 +350,11 @@ CREATE TABLE IF NOT EXISTS llm_connections (
   api_protocol TEXT NOT NULL,
   base_url TEXT NOT NULL,
   api_key TEXT NOT NULL,
+  default_model_id TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE llm_connections ADD COLUMN IF NOT EXISTS default_model_id TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_connections_user_workspace ON llm_connections (user_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_llm_connections_workspace ON llm_connections (workspace_id, user_id);
 CREATE TABLE IF NOT EXISTS llm_connection_models (

@@ -411,7 +411,7 @@ LIMIT $2 OFFSET $3
 func (s *Store) getWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
 	var connection LLMConnection
 	err := s.pool.QueryRow(ctx, `
-SELECT id, user_id, workspace_id, provider, api_protocol, base_url, api_key, created_at, updated_at
+SELECT id, user_id, workspace_id, provider, api_protocol, base_url, api_key, default_model_id, created_at, updated_at
 FROM llm_connections
 WHERE user_id = '' AND workspace_id = $1
 `, workspaceID).Scan(
@@ -422,6 +422,7 @@ WHERE user_id = '' AND workspace_id = $1
 		&connection.APIProtocol,
 		&connection.BaseURL,
 		&connection.APIKey,
+		&connection.DefaultModelID,
 		&connection.CreatedAt,
 		&connection.UpdatedAt,
 	)
@@ -436,17 +437,18 @@ WHERE user_id = '' AND workspace_id = $1
 
 func (s *Store) upsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error) {
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO llm_connections (id, user_id, workspace_id, provider, api_protocol, base_url, api_key, updated_at)
-VALUES ($1, '', $2, $3, $4, $5, $6, now())
+INSERT INTO llm_connections (id, user_id, workspace_id, provider, api_protocol, base_url, api_key, default_model_id, updated_at)
+VALUES ($1, '', $2, $3, $4, $5, $6, $7, now())
 ON CONFLICT (user_id, workspace_id)
 DO UPDATE SET
   provider = EXCLUDED.provider,
   api_protocol = EXCLUDED.api_protocol,
   base_url = EXCLUDED.base_url,
   api_key = EXCLUDED.api_key,
+  default_model_id = EXCLUDED.default_model_id,
   updated_at = now()
-RETURNING id, user_id, workspace_id, provider, api_protocol, base_url, api_key, created_at, updated_at
-`, connection.ID, workspaceID, connection.Provider, connection.APIProtocol, connection.BaseURL, connection.APIKey).Scan(
+RETURNING id, user_id, workspace_id, provider, api_protocol, base_url, api_key, default_model_id, created_at, updated_at
+`, connection.ID, workspaceID, connection.Provider, connection.APIProtocol, connection.BaseURL, connection.APIKey, connection.DefaultModelID).Scan(
 		&connection.ID,
 		&connection.UserID,
 		&connection.WorkspaceID,
@@ -454,6 +456,7 @@ RETURNING id, user_id, workspace_id, provider, api_protocol, base_url, api_key, 
 		&connection.APIProtocol,
 		&connection.BaseURL,
 		&connection.APIKey,
+		&connection.DefaultModelID,
 		&connection.CreatedAt,
 		&connection.UpdatedAt,
 	)
@@ -1210,7 +1213,7 @@ func (s *Store) sessionState(ctx context.Context, sessionID string) (SessionStat
 	}
 	state := SessionState{SessionID: sessionID, Messages: messages}
 	var activeRunID sql.NullString
-	err = s.pool.QueryRow(ctx, `SELECT active_run_id FROM sessions WHERE id = $1`, sessionID).Scan(&activeRunID)
+	err = s.pool.QueryRow(ctx, `SELECT model_id, active_run_id FROM sessions WHERE id = $1`, sessionID).Scan(&state.ModelID, &activeRunID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return SessionState{}, err
 	}
