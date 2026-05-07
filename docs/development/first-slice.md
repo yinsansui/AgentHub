@@ -70,10 +70,21 @@ make smoke-real-runtime
 make smoke-cancel-lifecycle
 ```
 
-如果 control-plane 运行在宿主机而不是 Docker network 内，默认的 `http://agent-pod-{workspaceId}:3001` 不能被宿主机 DNS 解析。此时可以先用本地 agent-pod 进程验证 SSE 链路：
+如果 control-plane 运行在宿主机而不是 Docker network 内，默认的 `http://agent-pod-{workspaceId}:3001` 不能被宿主机 DNS 解析。此时可以先启动 control-plane，登录后从 `GET /workspaces` 读取系统生成的 workspace UUID，再用本地 agent-pod 进程验证 SSE 链路：
 
 ```bash
-AGENTHUB_INTERNAL_TOKEN=dev-token WORKSPACE_ID=ws_dev go run ./cmd/agent-pod
+# 终端 1
+AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE=http://127.0.0.1:3001 \
+AGENTHUB_DEV_AGENT_POD_TOKEN=dev-token \
+go run ./cmd/control-plane
+
+# 终端 2
+COOKIE_JAR=$(mktemp)
+curl -sS -c "$COOKIE_JAR" -X POST http://127.0.0.1:3000/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+WORKSPACE_ID=$(curl -sS -b "$COOKIE_JAR" http://127.0.0.1:3000/workspaces | jq -r '.workspaces[0].id')
+AGENTHUB_INTERNAL_TOKEN=dev-token WORKSPACE_ID="$WORKSPACE_ID" go run ./cmd/agent-pod
 ```
 
 对接 Anthropic-compatible 真实模型时，先构建 TS runtime host。AgentPod 本地进程只需要 runtime-host 启动命令；LLM endpoint、API key 和可用 model 通过 control-plane API 存储到 DB / 内存 store：
@@ -83,26 +94,22 @@ cd runtimes/ts-runtime-host && npm ci && npm run build && cd ../..
 
 AGENTHUB_RUNTIME_COMMAND="node $(pwd)/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent" \
 AGENTHUB_INTERNAL_TOKEN=dev-token \
-WORKSPACE_ID=ws_dev \
+WORKSPACE_ID="$WORKSPACE_ID" \
 go run ./cmd/agent-pod
 ```
 
-另一个终端：
+另一个终端继续使用登录 cookie 和生成的 workspace UUID：
 
 ```bash
-AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE=http://127.0.0.1:3001 \
-AGENTHUB_DEV_AGENT_POD_TOKEN=dev-token \
-go run ./cmd/control-plane
-
-curl -sS -X PUT http://127.0.0.1:3000/workspaces/ws_dev/llm-connection \
+curl -sS -b "$COOKIE_JAR" -X PUT "http://127.0.0.1:3000/workspaces/${WORKSPACE_ID}/llm-connection" \
   -H 'content-type: application/json' \
   -d '{"provider":"anthropic","apiProtocol":"anthropic-messages","baseUrl":"http://example.local:8084","apiKey":"..."}'
 
-curl -sS -X PUT http://127.0.0.1:3000/workspaces/ws_dev/llm-models \
+curl -sS -b "$COOKIE_JAR" -X PUT "http://127.0.0.1:3000/workspaces/${WORKSPACE_ID}/llm-models" \
   -H 'content-type: application/json' \
   -d '{"modelId":"k2p5","enabled":true}'
 
-curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
+curl -sS -b "$COOKIE_JAR" -X POST "http://127.0.0.1:3000/workspaces/${WORKSPACE_ID}/sessions" \
   -H 'content-type: application/json' \
   -d '{"modelId":"k2p5","firstTurn":{"message":"hello"}}'
 ```
@@ -135,7 +142,12 @@ docker run -d --name agenthub-control-plane --network agenthub \
   agenthub-control-plane:dev
 
 # 创建 session 时后端会自动启动 workspace agent-pod，无需显式调用 /start。
-SESSION_ID=$(curl -sS -X POST http://127.0.0.1:3000/workspaces/ws_dev/sessions \
+COOKIE_JAR=$(mktemp)
+curl -sS -c "$COOKIE_JAR" -X POST http://127.0.0.1:3000/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+WORKSPACE_ID=$(curl -sS -b "$COOKIE_JAR" http://127.0.0.1:3000/workspaces | jq -r '.workspaces[0].id')
+SESSION_ID=$(curl -sS -b "$COOKIE_JAR" -X POST "http://127.0.0.1:3000/workspaces/${WORKSPACE_ID}/sessions" \
   -H 'content-type: application/json' \
   -d '{"firstTurn":{"message":"hello"}}' | jq -r '.session.sessionId')
 
@@ -165,5 +177,5 @@ curl -X POST "http://127.0.0.1:3000/sessions/${SESSION_ID}/interrupt" \
 清理：
 
 ```bash
-docker rm -f agenthub-control-plane agent-pod-ws_dev agenthub-postgres
+docker rm -f agenthub-control-plane agenthub-postgres
 ```

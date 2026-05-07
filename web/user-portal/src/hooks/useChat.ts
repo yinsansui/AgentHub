@@ -15,6 +15,7 @@ const SSE_EVENTS = [
 ];
 
 export function useChat(
+  userId: string,
   workspaceId: string,
   onError: (error: unknown, fallback: string) => void,
   onSessionCreated?: (session: { sessionId: string; taskId: string; workspaceId: string; modelId?: string; title?: string }) => void
@@ -107,7 +108,7 @@ export function useChat(
         };
         latestEventIdRef.current = next.latestEventId;
         setWorkbench(next);
-        sessionStorage.setItem(sessionStorageKey(workspaceId), state.sessionId);
+        sessionStorage.setItem(sessionStorageKey(userId, workspaceId), state.sessionId);
         const replay = await getSessionEvents(state.sessionId, next.latestEventId);
         const replayed = replay.events.reduce((c, e) => applyEvent(c, e.payload, e.id), next);
         latestEventIdRef.current = replay.nextCursor;
@@ -118,7 +119,7 @@ export function useChat(
         onError(error, "加载 session 失败");
       }
     },
-    [connectStream, disconnectStream, onError, workspaceId]
+    [connectStream, disconnectStream, onError, userId, workspaceId]
   );
 
   function resetWorkbench() {
@@ -152,7 +153,7 @@ export function useChat(
           modelId: response.session.modelId,
           activeRun: response.run ?? null
         }));
-        sessionStorage.setItem(sessionStorageKey(workspaceId), response.session.sessionId);
+        sessionStorage.setItem(sessionStorageKey(userId, workspaceId), response.session.sessionId);
         onSessionCreated?.(response.session);
         await loadSession(response.session.sessionId);
       } else {

@@ -9,19 +9,10 @@ import (
 	"strings"
 )
 
-type upsertWorkspaceRequest struct {
-	WorkspaceID string         `json:"workspaceId,omitempty"`
-	Name        string         `json:"name,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-}
-
-const (
-	defaultWorkspaceID   = "ws_dev"
-	defaultWorkspaceName = "Default 工作空间"
-)
+const defaultWorkspaceName = "Default 工作空间"
 
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
 	limit, _ := parseIntQuery(r, "limit", 100)
 	offset, _ := parseIntQuery(r, "offset", 0)
 	if limit <= 0 || limit > 200 {
@@ -30,7 +21,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
-	workspaces, err := s.store.ListWorkspaces(r.Context(), limit, offset)
+	workspaces, err := s.store.ListWorkspaces(r.Context(), userID, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -46,59 +37,42 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if workspaces == nil {
 		workspaces = []WorkspaceProjection{}
 	}
-	writeJSON(w, map[string]any{"workspaces": workspaces, "limit": limit, "offset": offset})
+	writeJSON(w, map[string]any{"workspaces": sanitizeWorkspacesForUser(userID, workspaces), "limit": limit, "offset": offset})
 }
 
 func (s *Server) ensureDefaultWorkspace(ctx context.Context) (WorkspaceProjection, error) {
-	workspace := WorkspaceProjection{
-		WorkspaceID: defaultWorkspaceID,
-		Name:        defaultWorkspaceName,
-		Metadata:    map[string]any{},
-	}
-	saved, err := s.store.CreateWorkspace(ctx, workspace)
-	if err == nil {
-		return saved, nil
-	}
-	if !errors.Is(err, ErrWorkspaceExists) {
-		return WorkspaceProjection{}, err
-	}
-	existing, ok, err := s.store.GetWorkspace(ctx, defaultWorkspaceID)
+	userID := currentUserID(ctx)
+	workspace, err := s.store.CreateWorkspace(ctx, userID, defaultWorkspaceName)
 	if err != nil {
 		return WorkspaceProjection{}, err
 	}
-	if !ok {
-		return WorkspaceProjection{}, ErrWorkspaceExists
-	}
-	return existing, nil
+	return sanitizeWorkspaceForUser(userID, workspace), nil
 }
 
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	var req upsertWorkspaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	workspace, err := buildWorkspaceProjection(strings.TrimSpace(req.WorkspaceID), req)
+	name, err := decodeWorkspaceNameRequest(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	saved, err := s.store.CreateWorkspace(r.Context(), workspace)
-	if errors.Is(err, ErrWorkspaceExists) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
+	saved, err := s.store.CreateWorkspace(r.Context(), currentUserID(r.Context()), name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"workspace": saved})
+	_ = json.NewEncoder(w).Encode(map[string]any{"workspace": sanitizeWorkspaceForUser(currentUserID(r.Context()), saved)})
 }
 
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
-	workspace, ok, err := s.store.GetWorkspace(r.Context(), r.PathValue("workspaceId"))
+	userID := currentUserID(r.Context())
+	workspaceID, err := workspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	workspace, ok, err := s.store.GetWorkspace(r.Context(), userID, workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -107,26 +81,22 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"workspace": workspace})
+	writeJSON(w, map[string]any{"workspace": sanitizeWorkspaceForUser(userID, workspace)})
 }
 
 func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
-	var req upsertWorkspaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.WorkspaceID != "" && req.WorkspaceID != workspaceID {
-		http.Error(w, "workspaceId in body must match path", http.StatusBadRequest)
-		return
-	}
-	workspace, err := buildWorkspaceProjection(workspaceID, req)
+	userID := currentUserID(r.Context())
+	workspaceID, err := workspaceIDFromRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	saved, ok, err := s.store.UpdateWorkspace(r.Context(), workspaceID, workspace)
+	name, err := decodeWorkspaceNameRequest(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	saved, ok, err := s.store.UpdateWorkspace(r.Context(), userID, workspaceID, name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -135,11 +105,34 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"workspace": saved})
+	writeJSON(w, map[string]any{"workspace": sanitizeWorkspaceForUser(userID, saved)})
 }
 
 func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
-	deleted, err := s.store.DeleteWorkspace(r.Context(), r.PathValue("workspaceId"))
+	userID := currentUserID(r.Context())
+	workspaceID, err := workspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, ok, err := s.store.GetWorkspace(r.Context(), userID, workspaceID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	if _, ok := s.workspaceToken(r.Context(), workspaceID); ok {
+		if err := s.driver.Stop(r.Context(), workspaceID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := s.driver.Remove(r.Context(), workspaceID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	deleted, err := s.store.DeleteWorkspace(r.Context(), userID, workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -148,22 +141,56 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"deleted": true})
+	s.clearToken(workspaceID)
+	response := map[string]any{"deleted": true}
+	remaining, err := s.store.ListWorkspaces(r.Context(), userID, 1, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(remaining) == 0 {
+		replacement, err := s.ensureDefaultWorkspace(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		response["replacementWorkspace"] = replacement
+	}
+	writeJSON(w, response)
 }
 
-func buildWorkspaceProjection(workspaceID string, req upsertWorkspaceRequest) (WorkspaceProjection, error) {
-	workspaceID = strings.TrimSpace(workspaceID)
-	if err := validateSafeSegment(workspaceID, "workspaceId"); err != nil {
-		return WorkspaceProjection{}, err
+func decodeWorkspaceNameRequest(body io.Reader) (string, error) {
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(body)
+	if err := decoder.Decode(&fields); err != nil {
+		if errors.Is(err, io.EOF) {
+			return "", errors.New("name is required")
+		}
+		return "", err
 	}
-	metadata := req.Metadata
-	if metadata == nil {
-		metadata = map[string]any{}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return "", errors.New("request body must contain a single JSON object")
 	}
-	return WorkspaceProjection{
-		WorkspaceID: workspaceID,
-		Name:        strings.TrimSpace(req.Name),
-		Description: strings.TrimSpace(req.Description),
-		Metadata:    cloneMetadata(metadata),
-	}, nil
+	if fields == nil {
+		return "", errors.New("request body must be a JSON object")
+	}
+	for field := range fields {
+		if field != "name" {
+			return "", errors.New("field " + field + " is not allowed")
+		}
+	}
+	rawName, ok := fields["name"]
+	if !ok {
+		return "", errors.New("name is required")
+	}
+	var name string
+	if err := json.Unmarshal(rawName, &name); err != nil {
+		return "", errors.New("name must be a string")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("name is required")
+	}
+	return name, nil
 }

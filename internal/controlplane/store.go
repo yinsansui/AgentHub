@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -31,11 +33,11 @@ const (
 
 type EventStore interface {
 	Ping(ctx context.Context) error
-	ListWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error)
-	CreateWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error)
-	GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error)
-	UpdateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error)
-	DeleteWorkspace(ctx context.Context, workspaceID string) (bool, error)
+	ListWorkspaces(ctx context.Context, ownerUserID string, limit, offset int) ([]WorkspaceProjection, error)
+	CreateWorkspace(ctx context.Context, ownerUserID, name string) (WorkspaceProjection, error)
+	GetWorkspace(ctx context.Context, ownerUserID, workspaceID string) (WorkspaceProjection, bool, error)
+	UpdateWorkspace(ctx context.Context, ownerUserID, workspaceID, name string) (WorkspaceProjection, bool, error)
+	DeleteWorkspace(ctx context.Context, ownerUserID, workspaceID string) (bool, error)
 	SaveWorkspaceToken(ctx context.Context, workspaceID string, token string) error
 	WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error)
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
@@ -93,12 +95,9 @@ type TaskProjection struct {
 }
 
 type WorkspaceProjection struct {
-	WorkspaceID string         `json:"workspaceId"`
-	Name        string         `json:"name,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	UpdatedAt   time.Time      `json:"updatedAt"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	OwnerUserID string `json:"ownerUserId"`
 }
 
 type SessionProjection struct {
@@ -231,6 +230,27 @@ type ActiveRunConflict struct {
 var ErrSessionNotFound = errors.New("session not found")
 var ErrWorkspaceExists = errors.New("workspace already exists")
 
+func newWorkspaceUUID() (string, error) {
+	var uuid [16]byte
+	if _, err := rand.Read(uuid[:]); err != nil {
+		return "", err
+	}
+	uuid[6] = (uuid[6] & 0x0f) | 0x40
+	uuid[8] = (uuid[8] & 0x3f) | 0x80
+
+	var dst [36]byte
+	hex.Encode(dst[0:8], uuid[0:4])
+	dst[8] = '-'
+	hex.Encode(dst[9:13], uuid[4:6])
+	dst[13] = '-'
+	hex.Encode(dst[14:18], uuid[6:8])
+	dst[18] = '-'
+	hex.Encode(dst[19:23], uuid[8:10])
+	dst[23] = '-'
+	hex.Encode(dst[24:36], uuid[10:16])
+	return string(dst[:]), nil
+}
+
 func (e *ActiveRunConflict) Error() string {
 	return "session already has an active run"
 }
@@ -261,17 +281,13 @@ func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT '',
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  pod_token TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  name TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL
 );
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE workspaces ALTER COLUMN pod_token SET DEFAULT '';
+CREATE TABLE IF NOT EXISTS workspace_tokens (
+  workspace_id TEXT PRIMARY KEY,
+  token TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_events (
   id BIGSERIAL PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -439,38 +455,38 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) ListWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error) {
-	return s.listWorkspaces(ctx, limit, offset)
+func (s *Store) ListWorkspaces(ctx context.Context, ownerUserID string, limit, offset int) ([]WorkspaceProjection, error) {
+	return s.listWorkspaces(ctx, ownerUserID, limit, offset)
 }
 
-func (s *Store) CreateWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error) {
-	return s.createWorkspace(ctx, workspace)
+func (s *Store) CreateWorkspace(ctx context.Context, ownerUserID, name string) (WorkspaceProjection, error) {
+	return s.createWorkspace(ctx, ownerUserID, name)
 }
 
-func (s *Store) GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error) {
-	return s.getWorkspace(ctx, workspaceID)
+func (s *Store) GetWorkspace(ctx context.Context, ownerUserID, workspaceID string) (WorkspaceProjection, bool, error) {
+	return s.getWorkspace(ctx, ownerUserID, workspaceID)
 }
 
-func (s *Store) UpdateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error) {
-	return s.updateWorkspace(ctx, workspaceID, workspace)
+func (s *Store) UpdateWorkspace(ctx context.Context, ownerUserID, workspaceID, name string) (WorkspaceProjection, bool, error) {
+	return s.updateWorkspace(ctx, ownerUserID, workspaceID, name)
 }
 
-func (s *Store) DeleteWorkspace(ctx context.Context, workspaceID string) (bool, error) {
-	return s.deleteWorkspace(ctx, workspaceID)
+func (s *Store) DeleteWorkspace(ctx context.Context, ownerUserID, workspaceID string) (bool, error) {
+	return s.deleteWorkspace(ctx, ownerUserID, workspaceID)
 }
 
 func (s *Store) SaveWorkspaceToken(ctx context.Context, workspaceID string, token string) error {
 	_, err := s.pool.Exec(ctx, `
-INSERT INTO workspaces (id, pod_token, updated_at)
-VALUES ($1, $2, now())
-ON CONFLICT (id) DO UPDATE SET pod_token = EXCLUDED.pod_token, updated_at = now()
+INSERT INTO workspace_tokens (workspace_id, token)
+VALUES ($1, $2)
+ON CONFLICT (workspace_id) DO UPDATE SET token = EXCLUDED.token
 `, workspaceID, token)
 	return err
 }
 
 func (s *Store) WorkspaceToken(ctx context.Context, workspaceID string) (string, bool, error) {
 	var token string
-	err := s.pool.QueryRow(ctx, `SELECT pod_token FROM workspaces WHERE id = $1`, workspaceID).Scan(&token)
+	err := s.pool.QueryRow(ctx, `SELECT token FROM workspace_tokens WHERE workspace_id = $1`, workspaceID).Scan(&token)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

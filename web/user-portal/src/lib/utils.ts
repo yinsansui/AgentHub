@@ -1,7 +1,7 @@
 import { ApiError } from "../api";
 
-export function sessionStorageKey(workspaceId: string): string {
-  return `agenthub:user-portal:${workspaceId}:sessionId`;
+export function sessionStorageKey(userId: string, workspaceId: string): string {
+	return `agenthub:user-portal:${userId}:${workspaceId}:sessionId`;
 }
 
 export function errorMessage(error: unknown, fallback: string): string {

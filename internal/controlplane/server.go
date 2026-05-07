@@ -17,8 +17,9 @@ type Server struct {
 	store  EventStore
 	hub    *EventHub
 
-	mu     sync.RWMutex
-	tokens map[string]string
+	mu           sync.RWMutex
+	tokens       map[string]string
+	authSessions map[string]AuthSession
 }
 
 func NewServer(config Config) *Server {
@@ -29,11 +30,12 @@ func NewServer(config Config) *Server {
 		WorkspaceRoot: config.WorkspaceRoot,
 	}
 	server := &Server{
-		config: config,
-		driver: dockerdriver.NewDockerAgentPodDriver(driverConfig),
-		pods:   NewAgentPodClient(config.AgentPodBaseURLTemplate),
-		hub:    NewEventHub(),
-		tokens: map[string]string{},
+		config:       config,
+		driver:       dockerdriver.NewDockerAgentPodDriver(driverConfig),
+		pods:         NewAgentPodClient(config.AgentPodBaseURLTemplate),
+		hub:          NewEventHub(),
+		tokens:       map[string]string{},
+		authSessions: map[string]AuthSession{},
 	}
 	if config.DatabaseURL == "" {
 		server.store = NewMemoryStore()
@@ -50,6 +52,9 @@ func NewServer(config Config) *Server {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /auth/login", s.handleLogin)
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /auth/me", s.handleMe)
 	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)
 	mux.HandleFunc("POST /workspaces", s.handleCreateWorkspace)
 	mux.HandleFunc("GET /workspaces/{workspaceId}", s.handleGetWorkspace)
@@ -79,7 +84,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /sessions/{sessionId}/messages", s.handleSessionMessages)
 	mux.HandleFunc("GET /sessions/{sessionId}/state", s.handleSessionState)
 	mux.HandleFunc("POST /sessions/{sessionId}/interrupt", s.handleSessionInterrupt)
-	return mux
+	return s.withAuth(mux)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +121,15 @@ func (s *Server) ensureWorkspaceStarted(ctx context.Context, workspaceID string)
 }
 
 func (s *Server) handleStopWorkspace(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	if err := s.driver.Stop(r.Context(), workspaceID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -125,17 +138,34 @@ func (s *Server) handleStopWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInspectWorkspace(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	info, err := s.driver.Inspect(r.Context(), workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	info.WorkspaceID = workspaceID
 	writeJSON(w, info)
 }
 
 func (s *Server) handleWorkspaceLogs(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	logs, err := s.driver.Logs(r.Context(), workspaceID, r.URL.Query().Get("tail"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -149,6 +179,12 @@ func (s *Server) setToken(workspaceID, token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tokens[workspaceID] = token
+}
+
+func (s *Server) clearToken(workspaceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tokens, workspaceID)
 }
 
 func (s *Server) workspaceToken(ctx context.Context, workspaceID string) (string, bool) {

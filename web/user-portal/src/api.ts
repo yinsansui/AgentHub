@@ -2,6 +2,7 @@ import type {
   LLMConnection,
   LLMModel,
   MCPServerDefinitionWithEnv,
+  CurrentUser,
   PodInfo,
   SessionProjection,
   SessionRun,
@@ -49,6 +50,21 @@ type InterruptResponse = {
 
 export async function getHealth(): Promise<{ ok: boolean }> {
   return apiRequest("/health");
+}
+
+export async function getMe(): Promise<{ user: CurrentUser }> {
+  return apiRequest("/auth/me");
+}
+
+export async function login(username: string, password: string): Promise<{ user: CurrentUser }> {
+  return apiRequest("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password })
+  });
+}
+
+export async function logout(): Promise<void> {
+  await apiRequest("/auth/logout", { method: "POST" });
 }
 
 export async function getPod(workspaceId: string): Promise<PodInfo> {
@@ -164,10 +180,23 @@ export async function getWorkspace(workspaceId: string): Promise<{ workspace: Wo
   return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}`);
 }
 
-export async function createWorkspace(workspaceId: string, name?: string, description?: string): Promise<{ workspace: WorkspaceProjection }> {
+export async function createWorkspace(name: string): Promise<{ workspace: WorkspaceProjection }> {
   return apiRequest(`/workspaces`, {
     method: "POST",
-    body: JSON.stringify({ workspaceId, name, description })
+    body: JSON.stringify({ name })
+  });
+}
+
+export async function updateWorkspace(id: string, name: string): Promise<{ workspace: WorkspaceProjection }> {
+  return apiRequest(`/workspaces/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify({ name })
+  });
+}
+
+export async function deleteWorkspace(id: string): Promise<{ deleted: boolean; replacementWorkspace?: WorkspaceProjection }> {
+  return apiRequest(`/workspaces/${encodeURIComponent(id)}`, {
+    method: "DELETE"
   });
 }
 
@@ -210,7 +239,7 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("content-type", "application/json");
   }
   headers.set("accept", "application/json");
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, { ...init, headers, credentials: "same-origin" });
   if (!response.ok) {
     throw new ApiError(response.status, await response.text());
   }
@@ -218,7 +247,7 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 async function apiRequestText(path: string, init: RequestInit = {}): Promise<string> {
-  const response = await fetch(path, init);
+  const response = await fetch(path, { ...init, credentials: "same-origin" });
   if (!response.ok) {
     throw new ApiError(response.status, await response.text());
   }

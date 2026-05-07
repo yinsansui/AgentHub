@@ -18,13 +18,76 @@ workspace 准备
 ## 1. 当前约束
 
 1. API base 暂按 control-plane 同源或代理前缀处理，本文只写相对路径。
-2. 当前 control-plane 没有用户认证、鉴权、多用户隔离接口；前端先按单用户 / dev workspace 处理。
-3. `workspaceId` 由前端或外层入口提供；当前没有 workspace 列表接口。
-4. session 创建时会自动创建默认 task；当前没有独立创建 task 的接口。
-5. session 创建后 `modelId` 锁定；只要已经有一次 turn，不支持切换 model。
-6. session skill / MCP 在创建 session 时物理化到 session cwd；修改 workspace skill / MCP 只影响新 session。
-7. repo plugin 暂不在本阶段范围内。
-8. 当前 DB 规则是不使用外键；前端不要从外键关系做推断。
+2. control-plane 使用 HTTP-only cookie 登录态。当前内置账号为 `admin` / `admin`，前端启动后先调用 `GET /auth/me`，未登录时展示登录页。
+3. 除 `GET /health`、`POST /auth/login`、`POST /auth/logout` 外，workspaces / sessions / LLM / skill / MCP 接口均需要登录 cookie。
+4. workspace 按 owner 隔离。API 路径里的 `{workspaceId}` 是后端生成的 UUID，对应 `GET /workspaces` 返回的 `id`，不是用户可编辑字段。
+5. workspace 对象形状为 `{ id, name, ownerUserId }`。`name` 是用户可见且可编辑的名称；创建和更新请求只提交 `{ "name": "..." }`。
+6. `GET /workspaces` 返回当前登录用户可见的 workspace 列表；首次为空时会为该 owner 创建名称为 `Default 工作空间` 的默认 workspace，id 为新的 UUID。
+7. session 创建时会自动创建默认 task；当前没有独立创建 task 的接口。
+8. session 创建后 `modelId` 锁定；只要已经有一次 turn，不支持切换 model。
+9. session skill / MCP 在创建 session 时物理化到 session cwd；修改 workspace skill / MCP 只影响新 session。
+10. repo plugin 暂不在本阶段范围内。
+11. 当前 DB 规则是不使用外键；前端不要从外键关系做推断。workspace 表字段是 `id`、`name`、`owner_user_id`。
+
+### 1.1 Auth 接口
+
+#### `POST /auth/login`
+
+请求：
+
+```json
+{"username":"admin","password":"admin"}
+```
+
+成功响应会设置 `agenthub_session` HTTP-only cookie：
+
+```json
+{"user":{"id":"admin","username":"admin","role":"admin"}}
+```
+
+#### `GET /auth/me`
+
+未登录返回 `401`；已登录返回当前用户：
+
+```json
+{"user":{"id":"admin","username":"admin","role":"admin"}}
+```
+
+#### `POST /auth/logout`
+
+清除登录 cookie，返回：
+
+```json
+{"ok":true}
+```
+
+### 1.2 Workspace 身份模型
+
+Workspace 的稳定身份是后端生成的 UUID。前端不要让用户填写或编辑 workspace id，也不要在创建或更新时提交 id。
+
+`GET /workspaces` 返回当前 owner 的列表。当前 owner 没有 workspace 时，后端会创建默认 workspace：
+
+```json
+{
+  "workspaces": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "name": "Default 工作空间",
+      "ownerUserId": "admin"
+    }
+  ],
+  "limit": 100,
+  "offset": 0
+}
+```
+
+`POST /workspaces` 和 `PUT /workspaces/{workspaceId}` 的请求体只接收名称：
+
+```json
+{"name":"Team Alpha"}
+```
+
+成功响应中的 workspace 对象始终是 `{ id, name, ownerUserId }`。`id` 用于 URL 和后续 API 路径，`name` 用于页面展示和重命名。
 
 ## 2. 页面 / 功能拆分
 
@@ -64,12 +127,12 @@ workspace 准备
 
 ```json
 {
-  "workspaceId": "ws_dev",
-  "name": "agent-pod-ws_dev",
+  "workspaceId": "00000000-0000-4000-8000-000000000001",
+  "name": "agent-pod-00000000-0000-4000-8000-000000000001",
   "image": "agenthub-agent-pod:dev",
   "network": "agenthub",
   "status": "running",
-  "endpoint": "http://agent-pod-ws_dev:3001"
+  "endpoint": "http://agent-pod-00000000-0000-4000-8000-000000000001:3001"
 }
 ```
 
@@ -98,7 +161,7 @@ Workbench 创建 session 前必须保证 workspace 已配置 LLM connection，�
   "connection": {
     "id": "llm_conn_xxx",
     "userId": "",
-    "workspaceId": "ws_dev",
+    "workspaceId": "00000000-0000-4000-8000-000000000001",
     "provider": "anthropic",
     "apiProtocol": "anthropic-messages",
     "baseUrl": "http://example.local:8084",
@@ -202,7 +265,7 @@ Workbench 创建 session 前必须保证 workspace 已配置 LLM connection，�
       "slug": "my-skill",
       "source": "workspace",
       "scopeType": "workspace",
-      "scopeId": "ws_dev",
+      "scopeId": "00000000-0000-4000-8000-000000000001",
       "name": "My Skill",
       "description": "What this skill does",
       "version": 1,
@@ -277,7 +340,7 @@ MCP 与 skill 来源保持一致，当前前端只需要处理 workspace source�
       "name": "local-tool",
       "source": "workspace",
       "scopeType": "workspace",
-      "scopeId": "ws_dev",
+      "scopeId": "00000000-0000-4000-8000-000000000001",
       "command": "node",
       "args": ["/path/to/server.js"],
       "transport": "stdio",
@@ -374,14 +437,14 @@ MCP 与 skill 来源保持一致，当前前端只需要处理 workspace source�
 {
   "task": {
     "taskId": "task_20260506100000.000000000",
-    "workspaceId": "ws_dev",
+    "workspaceId": "00000000-0000-4000-8000-000000000001",
     "createdAt": "2026-05-06T...Z",
     "updatedAt": "2026-05-06T...Z"
   },
   "session": {
     "sessionId": "sess_20260506100000.000000000",
     "taskId": "task_20260506100000.000000000",
-    "workspaceId": "ws_dev",
+    "workspaceId": "00000000-0000-4000-8000-000000000001",
     "modelId": "k2p5",
     "metadata": {},
     "createdAt": "2026-05-06T...Z",
@@ -394,13 +457,13 @@ MCP 与 skill 来源保持一致，当前前端只需要处理 workspace source�
 
 ```json
 {
-  "task": { "taskId": "task_...", "workspaceId": "ws_dev" },
-  "session": { "sessionId": "sess_...", "taskId": "task_...", "workspaceId": "ws_dev", "modelId": "k2p5" },
+  "task": { "taskId": "task_...", "workspaceId": "00000000-0000-4000-8000-000000000001" },
+  "session": { "sessionId": "sess_...", "taskId": "task_...", "workspaceId": "00000000-0000-4000-8000-000000000001", "modelId": "k2p5" },
   "run": {
     "runId": "run_...",
     "taskId": "task_...",
     "sessionId": "sess_...",
-    "workspaceId": "ws_dev",
+    "workspaceId": "00000000-0000-4000-8000-000000000001",
     "status": "running",
     "startedAt": "2026-05-06T...Z",
     "lastEventId": 2,
@@ -443,7 +506,7 @@ MCP 与 skill 来源保持一致，当前前端只需要处理 workspace source�
   "session": {
     "sessionId": "sess_...",
     "taskId": "task_...",
-    "workspaceId": "ws_dev",
+    "workspaceId": "00000000-0000-4000-8000-000000000001",
     "modelId": "k2p5"
   },
   "run": {
@@ -482,7 +545,7 @@ Workbench 初始化首选：
     {
       "sessionId": "sess_...",
       "messageId": "user_run_...",
-      "workspaceId": "ws_dev",
+      "workspaceId": "00000000-0000-4000-8000-000000000001",
       "runId": "run_...",
       "role": "user",
       "status": "completed",
@@ -545,7 +608,7 @@ Workbench 初始化首选：
       "payload": {
         "type": "text.delta",
         "timestamp": "2026-05-06T...Z",
-        "workspaceId": "ws_dev",
+        "workspaceId": "00000000-0000-4000-8000-000000000001",
         "taskId": "task_...",
         "sessionId": "sess_...",
         "runId": "run_...",
@@ -597,7 +660,7 @@ data: {"type":"text.delta", ...}
 {
   "type": "text.delta",
   "timestamp": "2026-05-06T...Z",
-  "workspaceId": "ws_dev",
+  "workspaceId": "00000000-0000-4000-8000-000000000001",
   "taskId": "task_...",
   "sessionId": "sess_...",
   "runId": "run_...",
@@ -813,35 +876,24 @@ type WorkbenchState = {
 
 这些不是 Workbench 前端能单独解决的问题，需要在实现时决定是临时绕过还是补后端接口：
 
-1. **没有 workspace 列表接口**  
-   Workbench 只能由外部指定 `workspaceId`，或先写死 dev workspace。
-
-2. **没有 task / session 列表接口**  
-   当前只能创建 session，或通过 URL 中已有 `sessionId` 恢复。普通用户要看到历史会话列表，需要新增类似：
-   - `GET /workspaces/{workspaceId}/sessions`
-   - 或 `GET /tasks/{taskId}/sessions`
-
-3. **没有获取单个 session 元信息接口**  
+1. **没有获取单个 session 元信息接口**
    当前 `/state` 只返回 `sessionId/messages/activeRun/latestEventId`，不返回 session 的 `taskId/workspaceId/modelId`。如果前端刷新后需要 modelId，建议补：
    - `GET /sessions/{sessionId}`
    - 或把 `session` 嵌入 `/state`。
 
-4. **没有删除 / 归档 session 接口**  
+2. **没有删除 / 归档 session 接口**
    本阶段可不做。
 
-5. **没有 session 重命名 / title 接口**  
+3. **没有 session 重命名 / title 接口**
    之前已决定 `goal/title` 暂时不需要，Workbench 不应先做标题编辑。
 
-6. **没有独立 task 创建接口**  
+4. **没有独立 task 创建接口**
    当前符合“通过创建 session 自动创建默认 task”的阶段设计；如果以后普通用户要先建 task 再开多个 session，需要再设计。
 
-7. **没有认证 / 用户维度 workspace 选择**  
-   本阶段按 dev / 单用户处理。
-
-8. **LLM apiKey 更新必须重新提交明文 key**  
+5. **LLM apiKey 更新必须重新提交明文 key**
    因为 `PUT /llm-connection` 要求 `apiKey` 必填且 GET 不返回明文。前端编辑 connection 时，如果用户不改 key，当前没有“保留旧 key”的接口语义，需要产品/后端确认。
 
-9. **MCP env 当前明文返回**  
+6. **MCP env 当前明文返回**
    已明确先不做 sensitive；普通用户页如果展示 MCP env，需要接受明文展示的风险。
 
 ## 13. MVP 验收清单
@@ -885,8 +937,6 @@ type WorkbenchState = {
 
 ### P2：需要后端补接口后再做
 
-- workspace 列表
-- session 历史列表
 - session 元信息详情
 - session 删除 / 归档
 - session 重命名

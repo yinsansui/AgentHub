@@ -6,7 +6,6 @@ CONTROL_PLANE_PORT="${AGENTHUB_CONTROL_PLANE_PORT:-3000}"
 AGENT_POD_PORT="${AGENTHUB_AGENT_POD_PORT:-3001}"
 USER_PORTAL_PORT="${AGENTHUB_USER_PORTAL_PORT:-5174}"
 POSTGRES_PORT="${AGENTHUB_POSTGRES_PORT:-5432}"
-WORKSPACE_ID="${AGENTHUB_WORKSPACE_ID:-ws_dev}"
 POSTGRES_CONTAINER="${AGENTHUB_POSTGRES_CONTAINER:-agenthub-dev-postgres}"
 DATABASE_URL="${AGENTHUB_DATABASE_URL:-}"
 SKIP_BUILD="${AGENTHUB_SKIP_BUILD:-0}"
@@ -113,8 +112,7 @@ log "starting AgentPod (port ${AGENT_POD_PORT})..."
 (
   cd "${ROOT_DIR}"
   AGENT_POD_ADDR=":${AGENT_POD_PORT}" \
-  WORKSPACE_ID="${WORKSPACE_ID}" \
-  WORKSPACE_DIR="${ROOT_DIR}/.agenthub/workspaces/${WORKSPACE_ID}" \
+  WORKSPACE_DIR="${ROOT_DIR}/.agenthub/workspaces" \
   AGENTHUB_INTERNAL_TOKEN="${INTERNAL_TOKEN}" \
   AGENTHUB_RUNTIME_COMMAND="node ${ROOT_DIR}/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent" \
   go run ./cmd/agent-pod >/dev/null 2>&1
@@ -165,9 +163,10 @@ echo ""
 echo "  ControlPlane: ${CONTROL_PLANE_URL}"
 echo "  AgentPod:     ${AGENT_POD_URL}"
 echo "  UserPortal:   ${USER_PORTAL_URL}"
-echo "  Workspace:    ${WORKSPACE_ID}"
+echo "  Login:        admin / admin"
 echo ""
-echo "  Frontend: ${USER_PORTAL_URL}?workspaceId=${WORKSPACE_ID}"
+echo "  Frontend: ${USER_PORTAL_URL}"
+echo "  Workspaces: log in, then use the workspace menu; the default workspace gets a generated UUID."
 echo ""
 echo "  Press Ctrl+C to stop all services"
 echo ""

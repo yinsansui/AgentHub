@@ -33,16 +33,36 @@ type upsertWorkspaceMCPServerRequest struct {
 }
 
 func (s *Server) handleListWorkspaceSkills(w http.ResponseWriter, r *http.Request) {
-	skills, err := s.store.ListWorkspaceSkills(r.Context(), r.PathValue("workspaceId"))
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	skills, err := s.store.ListWorkspaceSkills(r.Context(), workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"skills": skills})
+	writeJSON(w, map[string]any{"skills": sanitizeSkillsForUser(userID, skills)})
 }
 
 func (s *Server) handleGetWorkspaceSkill(w http.ResponseWriter, r *http.Request) {
-	skill, ok, err := s.store.GetWorkspaceSkill(r.Context(), r.PathValue("workspaceId"), r.PathValue("slug"))
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	skill, ok, err := s.store.GetWorkspaceSkill(r.Context(), workspaceID, r.PathValue("slug"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -51,11 +71,20 @@ func (s *Server) handleGetWorkspaceSkill(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "skill not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"skill": skill})
+	writeJSON(w, map[string]any{"skill": sanitizeSkillForUser(userID, skill)})
 }
 
 func (s *Server) handlePutWorkspaceSkill(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	slug := r.PathValue("slug")
 	var req upsertWorkspaceSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -72,11 +101,20 @@ func (s *Server) handlePutWorkspaceSkill(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"skill": saved})
+	writeJSON(w, map[string]any{"skill": sanitizeSkillForUser(userID, saved)})
 }
 
 func (s *Server) handleDeleteWorkspaceSkill(w http.ResponseWriter, r *http.Request) {
-	deleted, err := s.store.DeleteWorkspaceSkill(r.Context(), r.PathValue("workspaceId"), r.PathValue("slug"))
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	deleted, err := s.store.DeleteWorkspaceSkill(r.Context(), workspaceID, r.PathValue("slug"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -89,16 +127,36 @@ func (s *Server) handleDeleteWorkspaceSkill(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleListWorkspaceMCPServers(w http.ResponseWriter, r *http.Request) {
-	servers, err := s.store.ListWorkspaceMCPServers(r.Context(), r.PathValue("workspaceId"))
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	servers, err := s.store.ListWorkspaceMCPServers(r.Context(), workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"mcpServers": servers})
+	writeJSON(w, map[string]any{"mcpServers": sanitizeMCPServersForUser(userID, servers)})
 }
 
 func (s *Server) handleGetWorkspaceMCPServer(w http.ResponseWriter, r *http.Request) {
-	server, ok, err := s.store.GetWorkspaceMCPServer(r.Context(), r.PathValue("workspaceId"), r.PathValue("name"))
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	server, ok, err := s.store.GetWorkspaceMCPServer(r.Context(), workspaceID, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -107,11 +165,20 @@ func (s *Server) handleGetWorkspaceMCPServer(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "mcp server not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"mcpServer": server})
+	writeJSON(w, map[string]any{"mcpServer": sanitizeMCPServerForUser(userID, server)})
 }
 
 func (s *Server) handlePutWorkspaceMCPServer(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	name := r.PathValue("name")
 	var req upsertWorkspaceMCPServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -128,11 +195,20 @@ func (s *Server) handlePutWorkspaceMCPServer(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"mcpServer": saved})
+	writeJSON(w, map[string]any{"mcpServer": sanitizeMCPServerForUser(userID, saved)})
 }
 
 func (s *Server) handleDeleteWorkspaceMCPServer(w http.ResponseWriter, r *http.Request) {
-	deleted, err := s.store.DeleteWorkspaceMCPServer(r.Context(), r.PathValue("workspaceId"), r.PathValue("name"))
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	deleted, err := s.store.DeleteWorkspaceMCPServer(r.Context(), workspaceID, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

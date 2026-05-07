@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Plus, Settings, SquarePen } from "lucide-react";
-import type { FormEvent } from "react";
-import type { SessionProjection, WorkspaceProjection } from "../types";
+import { ChevronDown, LogOut, Settings, SquarePen, Plus, Pencil, Trash2 } from "lucide-react";
+import { createWorkspace, updateWorkspace, deleteWorkspace } from "../api";
+import type { CurrentUser, SessionProjection, WorkspaceProjection } from "../types";
 
 type Props = {
-  workspaceId: string;
-  workspaceDraft: string;
-  setWorkspaceDraft: (v: string) => void;
-  onWorkspaceSubmit: (e: FormEvent) => void;
+  activeWorkspaceId: string;
   workspaces: WorkspaceProjection[];
   workspacesLoading: boolean;
   workspacesLoaded: boolean;
-  onLoadWorkspaces: () => void;
+  onLoadWorkspaces: () => Promise<void>;
   onSelectWorkspace: (id: string) => void;
   sessionList: SessionProjection[];
   sessionListHasMore: boolean;
@@ -22,16 +19,25 @@ type Props = {
   onLoadMore: () => void;
   onNewSession: () => void;
   onOpenSettings: () => void;
+  user: CurrentUser;
+  onLogout: () => void;
 };
 
 export function SessionSidebar({
-  workspaceId, workspaceDraft, setWorkspaceDraft, onWorkspaceSubmit,
+  activeWorkspaceId,
   workspaces, workspacesLoading, workspacesLoaded, onLoadWorkspaces, onSelectWorkspace,
   sessionList, sessionListHasMore, sessionListLoading, sessionListError,
-  activeSessionId, onLoadSession, onLoadMore, onNewSession, onOpenSettings
+  activeSessionId, onLoadSession, onLoadMore, onNewSession, onOpenSettings, user, onLogout
 }: Props) {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [menuMode, setMenuMode] = useState<"list" | "create" | "rename" | "delete">("list");
+  const [formName, setFormName] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formLoading, setFormLoading] = useState(false);
+  const [editingWorkspace, setEditingWorkspace] = useState<WorkspaceProjection | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const activeWorkspaceName = activeWorkspace?.name || "选择 Workspace";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -51,9 +57,90 @@ export function SessionSidebar({
     }
   }, [workspaceMenuOpen, workspacesLoaded, workspacesLoading, onLoadWorkspaces]);
 
+  useEffect(() => {
+    if (!workspaceMenuOpen) {
+      const timer = setTimeout(() => {
+        setMenuMode("list");
+        setFormName("");
+        setFormError(null);
+        setEditingWorkspace(null);
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [workspaceMenuOpen]);
+
+  async function handleCreateSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const name = formName.trim();
+    if (!name) {
+      setFormError("请输入 workspace 名称");
+      return;
+    }
+    setFormLoading(true);
+    setFormError(null);
+    try {
+      const result = await createWorkspace(name);
+      await onLoadWorkspaces();
+      onSelectWorkspace(result.workspace.id);
+      setWorkspaceMenuOpen(false);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "创建失败");
+    } finally {
+      setFormLoading(false);
+    }
+  }
+
+  async function handleRenameSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!editingWorkspace) return;
+    const name = formName.trim();
+    if (!name) {
+      setFormError("请输入 workspace 名称");
+      return;
+    }
+    setFormLoading(true);
+    setFormError(null);
+    try {
+      await updateWorkspace(editingWorkspace.id, name);
+      await onLoadWorkspaces();
+      setWorkspaceMenuOpen(false);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "重命名失败");
+    } finally {
+      setFormLoading(false);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    if (!editingWorkspace) return;
+    setFormLoading(true);
+    setFormError(null);
+    try {
+      const result = await deleteWorkspace(editingWorkspace.id);
+      await onLoadWorkspaces();
+      if (activeWorkspaceId === editingWorkspace.id) {
+        const nextId = result.replacementWorkspace?.id || workspaces.find((w) => w.id !== editingWorkspace.id)?.id || "";
+        if (nextId) onSelectWorkspace(nextId);
+      }
+      setWorkspaceMenuOpen(false);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "删除失败");
+    } finally {
+      setFormLoading(false);
+    }
+  }
+
   return (
     <>
-      <div className="flex items-center gap-[5px] h-[52px] px-4 border-b border-black/[0.06]" />
+      <div className="flex items-center justify-between gap-2 h-[52px] px-4 border-b border-black/[0.06]">
+        <div className="min-w-0">
+          <p className="m-0 text-[13px] font-medium text-apple-fg truncate">{user.username}</p>
+          <p className="m-0 text-[11px] text-apple-fg-50 truncate">{user.role}</p>
+        </div>
+        <button type="button" className="min-h-8 w-8 p-0 bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5" onClick={onLogout} aria-label="退出登录">
+          <LogOut size={15} />
+        </button>
+      </div>
 
       <div className="px-2 pt-1 pb-2">
         <button type="button" className="w-full justify-start min-h-9 px-2.5 py-[7px] rounded-[10px] bg-apple-panel shadow-apple text-[13px] font-normal hover:bg-white/90" onClick={onNewSession}>
@@ -110,11 +197,12 @@ export function SessionSidebar({
         <div className="relative" ref={menuRef}>
           <button
             type="button"
+            data-testid="workspace-menu-trigger"
             className="w-full flex items-center gap-1.5 min-h-8 px-2 py-[5px] rounded-md bg-transparent shadow-none text-[13px] text-apple-fg-50 hover:bg-apple-fg-5 hover:text-apple-fg"
             onClick={() => setWorkspaceMenuOpen((v) => !v)}
           >
-            <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{workspaceId.charAt(0).toUpperCase()}</span>
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap flex-1 text-left">{workspaces.find((ws) => ws.workspaceId === workspaceId)?.name || workspaceId}</span>
+            <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{activeWorkspaceName.charAt(0).toUpperCase()}</span>
+            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap flex-1 text-left">{activeWorkspaceName}</span>
             <ChevronDown size={14} className={`flex-shrink-0 transition-transform duration-150 ${workspaceMenuOpen ? "rotate-180" : ""}`} />
           </button>
           {workspaceMenuOpen && (
@@ -122,39 +210,171 @@ export function SessionSidebar({
               {workspacesLoading && workspaces.length === 0 && (
                 <div className="py-3 text-center text-apple-fg-50 text-[13px]">加载中…</div>
               )}
-                {workspaces.map((ws) => (
+
+              {menuMode === "list" && (
+                <>
+                  {workspaces.map((workspace) => (
+                    <div
+                      key={workspace.id}
+                      className={`w-full flex items-center gap-2 px-2.5 py-[7px] rounded-lg text-left text-[13px] ${workspace.id === activeWorkspaceId ? "bg-apple-accent/10 text-apple-accent" : "text-apple-fg hover:bg-apple-bg"}`}
+                    >
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                        onClick={() => {
+                          onSelectWorkspace(workspace.id);
+                          setWorkspaceMenuOpen(false);
+                        }}
+                      >
+                        <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{workspace.name.charAt(0).toUpperCase()}</span>
+                        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{workspace.name}</span>
+                      </button>
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        <button
+                          type="button"
+                          className="w-6 h-6 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-accent rounded-md"
+                          aria-label="重命名"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingWorkspace(workspace);
+                            setFormName(workspace.name);
+                            setFormError(null);
+                            setMenuMode("rename");
+                          }}
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          className="w-6 h-6 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-destructive rounded-md"
+                          aria-label="删除"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingWorkspace(workspace);
+                            setFormError(null);
+                            setMenuMode("delete");
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                   <button
-                    key={ws.workspaceId}
                     type="button"
-                    className={`w-full flex items-center gap-2 px-2.5 py-[7px] rounded-lg text-left text-[13px] ${ws.workspaceId === workspaceId ? "bg-apple-accent/10 text-apple-accent" : "text-apple-fg hover:bg-apple-bg"}`}
+                    className="w-full flex items-center gap-2 px-2.5 py-[7px] rounded-lg text-left text-[13px] text-apple-accent hover:bg-apple-accent/5 mt-0.5"
                     onClick={() => {
-                      onSelectWorkspace(ws.workspaceId);
-                      setWorkspaceMenuOpen(false);
+                      setFormName("");
+                      setFormError(null);
+                      setMenuMode("create");
                     }}
                   >
-                    <span className="grid place-items-center w-4 h-4 rounded-full bg-apple-fg text-apple-bg text-[10px] font-semibold flex-shrink-0">{ws.workspaceId.charAt(0).toUpperCase()}</span>
-                    <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{ws.name || ws.workspaceId}</span>
+                    <Plus size={14} />
+                    <span>新建 Workspace</span>
                   </button>
-                ))}
-              <div className="border-t border-black/[0.06] my-1" />
-              <form
-                className="flex items-center gap-1.5 px-2 py-1"
-                onSubmit={(e) => {
-                  onWorkspaceSubmit(e);
-                  setWorkspaceMenuOpen(false);
-                }}
-              >
-                <input
-                  className="min-w-0 flex-1 p-0 bg-transparent shadow-none text-[13px] placeholder:text-apple-fg-50"
-                  value={workspaceDraft}
-                  onChange={(e) => setWorkspaceDraft(e.target.value)}
-                  placeholder="输入 workspace ID"
-                  aria-label="Workspace"
-                />
-                <button type="submit" className="min-h-7 w-7 p-0 bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5" aria-label="切换 Workspace">
-                  <Plus size={14} />
-                </button>
-              </form>
+                </>
+              )}
+
+              {menuMode === "create" && (
+                <form onSubmit={handleCreateSubmit} className="p-1">
+                  <input
+                    autoFocus
+                    placeholder="Workspace 名称"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    className="w-full text-[13px] px-2.5 py-[7px] rounded-lg bg-apple-bg shadow-none border border-black/[0.08]"
+                  />
+                  {formError && <p className="text-apple-destructive-text text-[12px] mt-1.5 px-0.5">{formError}</p>}
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <button
+                      type="button"
+                      className="min-h-7 px-2.5 py-0 text-[12px] bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 rounded-lg"
+                      onClick={() => {
+                        setMenuMode("list");
+                        setFormName("");
+                        setFormError(null);
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={formLoading}
+                      className="min-h-7 px-2.5 py-0 text-[12px] bg-apple-accent text-white shadow-none hover:bg-apple-accent-hover rounded-lg"
+                    >
+                      {formLoading ? "创建中…" : "创建"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {menuMode === "rename" && editingWorkspace && (
+                <form onSubmit={handleRenameSubmit} className="p-1">
+                  <input
+                    autoFocus
+                    placeholder="Workspace 名称"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    className="w-full text-[13px] px-2.5 py-[7px] rounded-lg bg-apple-bg shadow-none border border-black/[0.08]"
+                  />
+                  {formError && <p className="text-apple-destructive-text text-[12px] mt-1.5 px-0.5">{formError}</p>}
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <button
+                      type="button"
+                      className="min-h-7 px-2.5 py-0 text-[12px] bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 rounded-lg"
+                      onClick={() => {
+                        setMenuMode("list");
+                        setFormName("");
+                        setFormError(null);
+                        setEditingWorkspace(null);
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={formLoading}
+                      className="min-h-7 px-2.5 py-0 text-[12px] bg-apple-accent text-white shadow-none hover:bg-apple-accent-hover rounded-lg"
+                    >
+                      {formLoading ? "保存中…" : "保存"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {menuMode === "delete" && editingWorkspace && (
+                <div className="p-1">
+                  <p className="text-[13px] text-apple-fg px-0.5">
+                    确定删除 <span className="font-medium">{editingWorkspace.name}</span>？
+                  </p>
+                  {formError && <p className="text-apple-destructive-text text-[12px] mt-1.5 px-0.5">{formError}</p>}
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <button
+                      type="button"
+                      className="min-h-7 px-2.5 py-0 text-[12px] bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 rounded-lg"
+                      onClick={() => {
+                        setMenuMode("list");
+                        setFormError(null);
+                        setEditingWorkspace(null);
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      disabled={formLoading}
+                      className="min-h-7 px-2.5 py-0 text-[12px] bg-apple-destructive text-white shadow-none hover:opacity-90 rounded-lg"
+                      onClick={handleDeleteConfirm}
+                    >
+                      {formLoading ? "删除中…" : "删除"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!workspacesLoading && workspaces.length === 0 && menuMode === "list" && (
+                <div className="py-3 text-center text-apple-fg-50 text-[13px]">暂无 workspace</div>
+              )}
             </div>
           )}
         </div>

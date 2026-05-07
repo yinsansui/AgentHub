@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WORKSPACE_ID="${AGENTHUB_CANCEL_SMOKE_WORKSPACE_ID:-ws_cancel_lifecycle}"
 CONTROL_PLANE_PORT="${AGENTHUB_CANCEL_SMOKE_CONTROL_PLANE_PORT:-3331}"
 AGENT_POD_PORT="${AGENTHUB_CANCEL_SMOKE_AGENT_POD_PORT:-3330}"
 POSTGRES_PORT="${AGENTHUB_CANCEL_SMOKE_POSTGRES_PORT:-55434}"
@@ -13,8 +12,11 @@ CONTROL_PLANE_URL="http://127.0.0.1:${CONTROL_PLANE_PORT}"
 AGENT_POD_URL="http://127.0.0.1:${AGENT_POD_PORT}"
 INTERNAL_TOKEN="${AGENTHUB_CANCEL_SMOKE_INTERNAL_TOKEN:-dev-token}"
 RUN_ID="$(date -u +%Y%m%d%H%M%S)-$$"
+WORKSPACE_NAME="${AGENTHUB_CANCEL_SMOKE_WORKSPACE_NAME:-Cancel Lifecycle Smoke ${RUN_ID}}"
+WORKSPACE_ID=""
 TMP_DIR="${AGENTHUB_CANCEL_SMOKE_TMP_DIR:-${ROOT_DIR}/.agenthub/smoke-cancel/${RUN_ID}}"
 WORKSPACE_DIR="${TMP_DIR}/workspace"
+COOKIE_JAR="${TMP_DIR}/cookies.txt"
 POSTGRES_CONTAINER="${AGENTHUB_CANCEL_SMOKE_POSTGRES_CONTAINER:-agenthub-cancel-smoke-postgres-${RUN_ID}}"
 DATABASE_URL="${AGENTHUB_CANCEL_SMOKE_DATABASE_URL:-}"
 POSTGRES_STARTED=0
@@ -71,9 +73,9 @@ http_json() {
   local output status body
   output="$(mktemp "${TMP_DIR}/curl.XXXXXX")"
   if [[ -n "${payload}" ]]; then
-    status="$(curl -sS -o "${output}" -w '%{http_code}' -X "${method}" "${url}" -H 'content-type: application/json' --data-binary "${payload}")"
+    status="$(curl -sS -b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -o "${output}" -w '%{http_code}' -X "${method}" "${url}" -H 'content-type: application/json' --data-binary "${payload}")"
   else
-    status="$(curl -sS -o "${output}" -w '%{http_code}' -X "${method}" "${url}")"
+    status="$(curl -sS -b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -o "${output}" -w '%{http_code}' -X "${method}" "${url}")"
   fi
   body="$(cat "${output}")"
   rm -f "${output}"
@@ -89,7 +91,7 @@ http_json_status() {
   local payload="${3:-}"
   local body_file="$4"
   local status
-  status="$(curl -sS -o "${body_file}" -w '%{http_code}' -X "${method}" "${url}" -H 'content-type: application/json' --data-binary "${payload}")"
+  status="$(curl -sS -b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -o "${body_file}" -w '%{http_code}' -X "${method}" "${url}" -H 'content-type: application/json' --data-binary "${payload}")"
   printf '%s' "${status}"
 }
 
@@ -120,6 +122,27 @@ wait_postgres() {
     fi
     sleep 1
   done
+}
+
+workspace_payload() {
+  WORKSPACE_NAME="$1" python3 - <<'PYJSON'
+import json, os
+print(json.dumps({"name": os.environ["WORKSPACE_NAME"]}, ensure_ascii=False))
+PYJSON
+}
+
+acquire_workspace() {
+  local name="$1"
+  local create_response workspace_id
+  log "listing workspaces to initialize the default workspace"
+  http_json GET "${CONTROL_PLANE_URL}/workspaces?limit=100&offset=0" >"${TMP_DIR}/workspaces-before.json"
+  log "creating smoke workspace '${name}'"
+  create_response="$(http_json POST "${CONTROL_PLANE_URL}/workspaces" "$(workspace_payload "${name}")")"
+  printf '%s\n' "${create_response}" >"${TMP_DIR}/workspace.json"
+  workspace_id="$(printf '%s' "${create_response}" | json_get 'data.get("workspace", {}).get("id", "")')"
+  [[ -n "${workspace_id}" ]] || fail "create workspace response missing id: ${create_response}"
+  [[ "${workspace_id}" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "workspace id is not a UUID: ${workspace_id}"
+  printf '%s' "${workspace_id}"
 }
 
 require_cmd curl
@@ -175,7 +198,6 @@ log "starting agent-pod at ${AGENT_POD_URL}"
 (
   cd "${ROOT_DIR}"
   AGENT_POD_ADDR=":${AGENT_POD_PORT}" \
-  WORKSPACE_ID="${WORKSPACE_ID}" \
   WORKSPACE_DIR="${WORKSPACE_DIR}" \
   AGENTHUB_INTERNAL_TOKEN="${INTERNAL_TOKEN}" \
   AGENTHUB_RUNTIME_COMMAND="node ${TMP_DIR}/cancel-runtime.mjs" \
@@ -196,6 +218,11 @@ log "starting control-plane at ${CONTROL_PLANE_URL}"
 ) &
 CONTROL_PLANE_PID=$!
 wait_http_ok "${CONTROL_PLANE_URL}/health" "${CONTROL_PLANE_PID}" "${TMP_DIR}/control-plane.log"
+
+log "logging in to control-plane as admin"
+http_json POST "${CONTROL_PLANE_URL}/auth/login" '{"username":"admin","password":"admin"}' >/dev/null
+WORKSPACE_ID="$(acquire_workspace "${WORKSPACE_NAME}")"
+log "using workspace ${WORKSPACE_ID} (${WORKSPACE_NAME})"
 
 log "configuring dummy LLM connection and model"
 http_json PUT "${CONTROL_PLANE_URL}/workspaces/${WORKSPACE_ID}/llm-connection" '{"provider":"anthropic","apiProtocol":"anthropic-messages","baseUrl":"http://unused.local","apiKey":"dummy"}' >/dev/null

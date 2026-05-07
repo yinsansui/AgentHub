@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WORKSPACE_ID="${AGENTHUB_SMOKE_WORKSPACE_ID:-ws_golden_path}"
 MODEL_ID="${AGENTHUB_SMOKE_LLM_MODEL_ID:-k2p5}"
 LLM_PROVIDER="${AGENTHUB_SMOKE_LLM_PROVIDER:-anthropic}"
 LLM_API_PROTOCOL="${AGENTHUB_SMOKE_LLM_API_PROTOCOL:-anthropic-messages}"
@@ -21,8 +20,11 @@ CONTROL_PLANE_URL="http://127.0.0.1:${CONTROL_PLANE_PORT}"
 AGENT_POD_URL="http://127.0.0.1:${AGENT_POD_PORT}"
 INTERNAL_TOKEN="${AGENTHUB_SMOKE_INTERNAL_TOKEN:-dev-token}"
 RUN_ID="$(date -u +%Y%m%d%H%M%S)-$$"
+WORKSPACE_NAME="${AGENTHUB_SMOKE_WORKSPACE_NAME:-Golden Path Smoke ${RUN_ID}}"
+WORKSPACE_ID=""
 TMP_DIR="${AGENTHUB_SMOKE_TMP_DIR:-${ROOT_DIR}/.agenthub/smoke/${RUN_ID}}"
 WORKSPACE_DIR="${TMP_DIR}/workspace"
+COOKIE_JAR="${TMP_DIR}/cookies.txt"
 POSTGRES_CONTAINER="${AGENTHUB_SMOKE_POSTGRES_CONTAINER:-agenthub-smoke-postgres-${RUN_ID}}"
 DATABASE_URL="${AGENTHUB_SMOKE_DATABASE_URL:-}"
 POSTGRES_STARTED=0
@@ -82,9 +84,9 @@ http_json() {
   local output status body
   output="$(mktemp "${TMP_DIR}/curl.XXXXXX")"
   if [[ -n "${payload}" ]]; then
-    status="$(curl -sS -o "${output}" -w '%{http_code}' -X "${method}" "${url}" -H 'content-type: application/json' --data-binary "${payload}")"
+    status="$(curl -sS -b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -o "${output}" -w '%{http_code}' -X "${method}" "${url}" -H 'content-type: application/json' --data-binary "${payload}")"
   else
-    status="$(curl -sS -o "${output}" -w '%{http_code}' -X "${method}" "${url}")"
+    status="$(curl -sS -b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -o "${output}" -w '%{http_code}' -X "${method}" "${url}")"
   fi
   body="$(cat "${output}")"
   rm -f "${output}"
@@ -123,6 +125,27 @@ wait_postgres() {
   done
 }
 
+workspace_payload() {
+  WORKSPACE_NAME="$1" python3 - <<'PYJSON'
+import json, os
+print(json.dumps({"name": os.environ["WORKSPACE_NAME"]}, ensure_ascii=False))
+PYJSON
+}
+
+acquire_workspace() {
+  local name="$1"
+  local create_response workspace_id
+  log "listing workspaces to initialize the default workspace"
+  http_json GET "${CONTROL_PLANE_URL}/workspaces?limit=100&offset=0" >"${TMP_DIR}/workspaces-before.json"
+  log "creating smoke workspace '${name}'"
+  create_response="$(http_json POST "${CONTROL_PLANE_URL}/workspaces" "$(workspace_payload "${name}")")"
+  printf '%s\n' "${create_response}" >"${TMP_DIR}/workspace.json"
+  workspace_id="$(printf '%s' "${create_response}" | json_get 'data.get("workspace", {}).get("id", "")')"
+  [[ -n "${workspace_id}" ]] || fail "create workspace response missing id: ${create_response}"
+  [[ "${workspace_id}" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "workspace id is not a UUID: ${workspace_id}"
+  printf '%s' "${workspace_id}"
+}
+
 require_cmd curl
 require_cmd python3
 require_cmd go
@@ -158,7 +181,6 @@ log "starting agent-pod at ${AGENT_POD_URL}"
 (
   cd "${ROOT_DIR}"
   AGENT_POD_ADDR=":${AGENT_POD_PORT}" \
-  WORKSPACE_ID="${WORKSPACE_ID}" \
   WORKSPACE_DIR="${WORKSPACE_DIR}" \
   AGENTHUB_INTERNAL_TOKEN="${INTERNAL_TOKEN}" \
   AGENTHUB_RUNTIME_COMMAND="node ${ROOT_DIR}/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent" \
@@ -178,6 +200,11 @@ log "starting control-plane at ${CONTROL_PLANE_URL}"
 ) &
 CONTROL_PLANE_PID=$!
 wait_http_ok "${CONTROL_PLANE_URL}/health" "${CONTROL_PLANE_PID}" "${TMP_DIR}/control-plane.log"
+
+log "logging in to control-plane as admin"
+http_json POST "${CONTROL_PLANE_URL}/auth/login" '{"username":"admin","password":"admin"}' >/dev/null
+WORKSPACE_ID="$(acquire_workspace "${WORKSPACE_NAME}")"
+log "using workspace ${WORKSPACE_ID} (${WORKSPACE_NAME})"
 
 log "configuring workspace skill and MCP definitions"
 SKILL_PAYLOAD="$(python3 - <<'PY'

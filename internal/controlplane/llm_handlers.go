@@ -32,7 +32,17 @@ type upsertWorkspaceLLMModelRequest struct {
 }
 
 func (s *Server) handleGetWorkspaceLLMConnection(w http.ResponseWriter, r *http.Request) {
-	connection, ok, err := s.store.GetWorkspaceLLMConnection(r.Context(), r.PathValue("workspaceId"))
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	connection, ok, err := s.store.GetWorkspaceLLMConnection(r.Context(), workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -41,11 +51,20 @@ func (s *Server) handleGetWorkspaceLLMConnection(w http.ResponseWriter, r *http.
 		http.Error(w, "llm connection not configured", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"connection": redactLLMConnection(connection), "apiKeySet": connection.APIKey != ""})
+	writeJSON(w, map[string]any{"connection": redactLLMConnection(sanitizeConnectionForUser(userID, connection)), "apiKeySet": connection.APIKey != ""})
 }
 
 func (s *Server) handlePutWorkspaceLLMConnection(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	var req upsertWorkspaceLLMConnectionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -61,11 +80,20 @@ func (s *Server) handlePutWorkspaceLLMConnection(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"connection": redactLLMConnection(saved), "apiKeySet": saved.APIKey != ""})
+	writeJSON(w, map[string]any{"connection": redactLLMConnection(sanitizeConnectionForUser(userID, saved)), "apiKeySet": saved.APIKey != ""})
 }
 
 func (s *Server) handleListWorkspaceLLMModels(w http.ResponseWriter, r *http.Request) {
-	models, err := s.store.ListWorkspaceLLMModels(r.Context(), r.PathValue("workspaceId"))
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	models, err := s.store.ListWorkspaceLLMModels(r.Context(), workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -74,7 +102,15 @@ func (s *Server) handleListWorkspaceLLMModels(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handlePutWorkspaceLLMModel(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	var req upsertWorkspaceLLMModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -94,7 +130,15 @@ func (s *Server) handlePutWorkspaceLLMModel(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleRefreshWorkspaceLLMModels(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	connection, ok, err := s.store.GetWorkspaceLLMConnection(r.Context(), workspaceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

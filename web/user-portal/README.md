@@ -9,7 +9,15 @@ npm install
 npm run dev
 ```
 
-默认代理到本地后端 `http://localhost:8080`（见 `vite.config.ts`）。
+默认代理到本地后端 `http://127.0.0.1:3000`（见 `vite.config.ts`）。如需改用其他后端地址，可设置 `AGENTHUB_USER_PORTAL_PROXY_TARGET`。
+
+首次进入会展示登录页。当前原型内置账号为：
+
+```text
+admin / admin
+```
+
+登录成功后，后端通过 HTTP-only cookie 维持会话。
 
 ## 构建
 
@@ -36,4 +44,4 @@ src/
 
 ## 工作区参数
 
-URL 中通过 `?workspaceId=<id>` 指定工作区，默认为 `ws_dev`。
+URL 中通过 `?workspaceId=<uuid>` 指定当前工作区。这个值来自后端返回的 `workspace.id`，是系统生成的 UUID，不是用户可编辑字段。用户看到并能修改的是 `workspace.name`。首次登录后，`GET /workspaces` 会按当前 owner 自动创建 `Default 工作空间`，返回形状为 `{ id, name, ownerUserId }`。最近使用的 session 会按 `userId + workspaceId` 存入 `sessionStorage`，避免不同用户或 workspace 串用。

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { getMe, logout } from "./api";
 import { errorMessage, sessionStorageKey } from "./lib/utils";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useSessionList } from "./hooks/useSessionList";
@@ -6,10 +7,10 @@ import { useWorkspaceList } from "./hooks/useWorkspaceList";
 import { useChat } from "./hooks/useChat";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { ChatPanel } from "./components/ChatPanel";
+import { LoginPage } from "./components/LoginPage";
 import { SettingsPanel } from "./components/SettingsPanel";
 import type { Notice } from "./hooks/useWorkspace";
-import type { FormEvent } from "react";
-import type { WorkspaceProjection } from "./types";
+import type { CurrentUser, WorkspaceProjection } from "./types";
 
 type NavigationPanel = "sessions" | "settings";
 type SettingsTab = "llm" | "skills" | "mcp";
@@ -17,40 +18,60 @@ type SettingsTab = "llm" | "skills" | "mcp";
 function resolveInitialWorkspaceId(workspaces: WorkspaceProjection[]): string {
   const params = new URLSearchParams(window.location.search);
   const fromUrl = params.get("workspaceId")?.trim();
-  if (fromUrl) return fromUrl;
-  if (workspaces.length > 0) return workspaces[0].workspaceId;
+  if (fromUrl && workspaces.some((workspace) => workspace.id === fromUrl)) return fromUrl;
+  if (workspaces.length > 0) return workspaces[0].id;
   return "";
 }
 
+function syncWorkspaceUrl(workspaceId: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("workspaceId", workspaceId);
+  window.history.replaceState(null, "", url);
+}
+
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const workspaceList = useWorkspaceList();
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [workspaceDraft, setWorkspaceDraft] = useState("");
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [activePanel, setActivePanel] = useState<NavigationPanel>("sessions");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("llm");
 
-  const workspace = useWorkspace(workspaceId);
-  const sessions = useSessionList(workspaceId);
+  const workspace = useWorkspace(activeWorkspaceId);
+  const sessions = useSessionList(activeWorkspaceId);
 
   useEffect(() => {
-    if (workspaceList.loaded) return;
-    void workspaceList.loadWorkspaces();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    void getMe()
+      .then((payload) => {
+        if (!cancelled) setCurrentUser(payload.user);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
+    if (!currentUser) return;
+    if (workspaceList.loaded) return;
+    void workspaceList.loadWorkspaces();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
     if (!workspaceList.loaded) return;
     const resolved = resolveInitialWorkspaceId(workspaceList.workspaces);
     if (!resolved) return;
-    if (resolved === workspaceId) return;
-    setWorkspaceId(resolved);
-    const selected = workspaceList.workspaces.find((w) => w.workspaceId === resolved);
-    setWorkspaceDraft(selected?.name ?? resolved);
-    const url = new URL(window.location.href);
-    url.searchParams.set("workspaceId", resolved);
-    window.history.replaceState(null, "", url);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceList.loaded, workspaceList.workspaces]);
+    if (resolved !== activeWorkspaceId) setActiveWorkspaceId(resolved);
+    syncWorkspaceUrl(resolved);
+  }, [currentUser, activeWorkspaceId, workspaceList.loaded, workspaceList.workspaces]);
 
 
 
@@ -65,7 +86,7 @@ export default function App() {
     sessions.prependSession(session);
   }, [sessions]);
 
-  const chat = useChat(workspaceId, reportError, handleSessionCreated);
+  const chat = useChat(currentUser?.id ?? "", activeWorkspaceId, reportError, handleSessionCreated);
 
   useEffect(() => {
     if (workspace.notice?.tone !== "success") return;
@@ -74,36 +95,33 @@ export default function App() {
   }, [workspace.notice, workspace.setNotice]);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!currentUser) return;
+    if (!activeWorkspaceId) return;
     void workspace.refreshWorkspace();
     sessions.resetSessions();
     void sessions.loadMoreSessions(true);
     chat.resetWorkbench();
-    const stored = sessionStorage.getItem(sessionStorageKey(workspaceId));
+    const stored = sessionStorage.getItem(sessionStorageKey(currentUser.id, activeWorkspaceId));
     if (stored) {
       void chat.loadSession(stored);
     }
     return () => chat.disconnectStream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId]);
+  }, [currentUser, activeWorkspaceId]);
 
-  function handleWorkspaceSubmit(event: FormEvent) {
-    event.preventDefault();
-    const next = workspaceDraft.trim();
-    if (!next) return;
-    setWorkspaceId(next);
-    const url = new URL(window.location.href);
-    url.searchParams.set("workspaceId", next);
-    window.history.replaceState(null, "", url);
+  async function handleLogout() {
+    await logout();
+    sessionStorage.clear();
+    chat.disconnectStream();
+    chat.resetWorkbench();
+    setActiveWorkspaceId("");
+    setCurrentUser(null);
+    setAuthChecked(true);
   }
 
   function handleSelectWorkspace(nextId: string) {
-    setWorkspaceId(nextId);
-    const selected = workspaceList.workspaces.find((w) => w.workspaceId === nextId);
-    setWorkspaceDraft(selected?.name ?? nextId);
-    const url = new URL(window.location.href);
-    url.searchParams.set("workspaceId", nextId);
-    window.history.replaceState(null, "", url);
+    setActiveWorkspaceId(nextId);
+    syncWorkspaceUrl(nextId);
   }
 
   function handleNewSession() {
@@ -114,6 +132,14 @@ export default function App() {
   function handleLoadSession(sessionId: string) {
     setActivePanel("sessions");
     void chat.loadSession(sessionId);
+  }
+
+  if (!authChecked) {
+    return <main className="login-shell"><p className="text-apple-fg-50">正在检查登录状态…</p></main>;
+  }
+
+  if (!currentUser) {
+    return <LoginPage onAuthenticated={setCurrentUser} />;
   }
 
   if (activePanel === "settings") {
@@ -165,10 +191,7 @@ export default function App() {
       <main className="grid h-screen min-h-[720px] grid-cols-[220px_minmax(520px,1fr)] gap-2 p-2 max-[700px]:grid-cols-1 max-[700px]:p-0">
         <aside className="min-w-0 min-h-0 flex flex-col gap-0 p-0 bg-transparent max-[700px]:rounded-none">
           <SessionSidebar
-            workspaceId={workspaceId}
-            workspaceDraft={workspaceDraft}
-            setWorkspaceDraft={setWorkspaceDraft}
-            onWorkspaceSubmit={handleWorkspaceSubmit}
+            activeWorkspaceId={activeWorkspaceId}
             workspaces={workspaceList.workspaces}
             workspacesLoading={workspaceList.loading}
             workspacesLoaded={workspaceList.loaded}
@@ -183,6 +206,8 @@ export default function App() {
             onLoadMore={() => void sessions.loadMoreSessions()}
             onNewSession={handleNewSession}
             onOpenSettings={() => setActivePanel("settings")}
+            user={currentUser}
+            onLogout={() => void handleLogout()}
           />
         </aside>
         <section className="min-w-0 min-h-0 bg-apple-panel shadow-apple-card overflow-hidden rounded-2xl grid grid-rows-[auto_minmax(0,1fr)_auto] relative max-[700px]:rounded-none max-[700px]:min-h-[78vh]">

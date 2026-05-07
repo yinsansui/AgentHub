@@ -15,7 +15,16 @@ import (
 )
 
 func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	var req protocol.CreateSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -71,7 +80,7 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if req.FirstTurn == nil {
-		writeJSON(w, map[string]any{"task": task, "session": session})
+		writeJSON(w, map[string]any{"task": sanitizeTaskForUser(userID, task), "session": sanitizeSessionForUser(userID, session)})
 		return
 	}
 
@@ -80,13 +89,13 @@ func (s *Server) handleCreateWorkspaceSession(w http.ResponseWriter, r *http.Req
 		var conflict *ActiveRunConflict
 		if errors.As(err, &conflict) {
 			w.WriteHeader(http.StatusConflict)
-			writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": conflict.ActiveRun})
+			writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": sanitizeRunForUser(userID, conflict.ActiveRun)})
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"task": task, "session": session, "run": run, "streamUrl": "/sessions/" + session.SessionID + "/stream"})
+	writeJSON(w, map[string]any{"task": sanitizeTaskForUser(userID, task), "session": sanitizeSessionForUser(userID, session), "run": sanitizeRunForUser(userID, run), "streamUrl": "/sessions/" + session.SessionID + "/stream"})
 }
 
 func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +110,8 @@ func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	session, ok, err := s.store.GetSession(r.Context(), sessionID)
+	userID := currentUserID(r.Context())
+	session, ok, err := s.sessionForCurrentUser(r, sessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -121,7 +131,7 @@ func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request)
 		var conflict *ActiveRunConflict
 		if errors.As(err, &conflict) {
 			w.WriteHeader(http.StatusConflict)
-			writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": conflict.ActiveRun})
+			writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": sanitizeRunForUser(userID, conflict.ActiveRun)})
 			return
 		}
 		if errors.Is(err, ErrSessionNotFound) {
@@ -131,7 +141,7 @@ func (s *Server) handleCreateSessionTurn(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"session": session, "run": run, "streamUrl": "/sessions/" + session.SessionID + "/stream"})
+	writeJSON(w, map[string]any{"session": sanitizeSessionForUser(userID, session), "run": sanitizeRunForUser(userID, run), "streamUrl": "/sessions/" + session.SessionID + "/stream"})
 }
 
 func (s *Server) startTurnForSession(ctx context.Context, workspaceID, token string, turn protocol.TurnRequest) (SessionRun, error) {
@@ -352,6 +362,14 @@ func timeoutRunError(timeout time.Duration) *protocol.EventErrorPayload {
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
+	if _, ok, err := s.sessionForCurrentUser(r, r.PathValue("sessionId")); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	afterID, err := parseInt64Query(r, "after", 0)
 	if err != nil {
 		http.Error(w, "after must be an integer event id", http.StatusBadRequest)
@@ -371,11 +389,19 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	if len(events) > 0 {
 		nextCursor = events[len(events)-1].ID
 	}
-	writeJSON(w, map[string]any{"events": events, "nextCursor": nextCursor})
+	writeJSON(w, map[string]any{"events": sanitizeEventsForUser(userID, events), "nextCursor": nextCursor})
 }
 
 func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
 	sessionID := r.PathValue("sessionId")
+	if _, ok, err := s.sessionForCurrentUser(r, sessionID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	afterID, err := streamAfterID(r)
 	if err != nil {
 		http.Error(w, "Last-Event-ID/after must be an integer event id", http.StatusBadRequest)
@@ -401,7 +427,7 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request) {
 			if event.ID <= cursor {
 				continue
 			}
-			if err := sse.WriteEventWithID(w, event.ID, event.Payload); err != nil {
+			if err := sse.WriteEventWithID(w, event.ID, sanitizeProtocolEventForUser(userID, event.Payload)); err != nil {
 				return
 			}
 			cursor = event.ID
@@ -416,25 +442,49 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
+	if _, ok, err := s.sessionForCurrentUser(r, r.PathValue("sessionId")); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	messages, err := s.store.ListMessagesBySession(r.Context(), r.PathValue("sessionId"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"messages": messages})
+	writeJSON(w, map[string]any{"messages": sanitizeMessagesForUser(userID, messages)})
 }
 
 func (s *Server) handleSessionState(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
+	if _, ok, err := s.sessionForCurrentUser(r, r.PathValue("sessionId")); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	state, err := s.store.SessionState(r.Context(), r.PathValue("sessionId"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, state)
+	writeJSON(w, sanitizeStateForUser(userID, state))
 }
 
 func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
 	sessionID := r.PathValue("sessionId")
+	if _, ok, err := s.sessionForCurrentUser(r, sessionID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	var req protocol.InterruptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -456,6 +506,8 @@ func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) 
 		if result.Reason != "already_terminal" {
 			w.WriteHeader(http.StatusConflict)
 		}
+		result.ActiveRun = sanitizeRunPointerForUser(userID, result.ActiveRun)
+		result.Run = sanitizeRunPointerForUser(userID, result.Run)
 		writeJSON(w, result)
 		return
 	}
@@ -488,7 +540,7 @@ func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) 
 			_, _ = s.appendAndPublish(context.Background(), event)
 		}
 	}
-	writeJSON(w, map[string]any{"interrupted": true, "run": result.Run, "cancelDelivered": cancelDelivered, "cancelError": cancelError})
+	writeJSON(w, map[string]any{"interrupted": true, "run": sanitizeRunPointerForUser(userID, result.Run), "cancelDelivered": cancelDelivered, "cancelError": cancelError})
 }
 
 func (s *Server) appendAndPublish(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {
@@ -532,6 +584,7 @@ func (s *Server) finishRunAfterTurn(ctx context.Context, started SessionRun, tur
 }
 
 func (s *Server) writeReplay(w http.ResponseWriter, r *http.Request, sessionID string, cursor *int64) error {
+	userID := currentUserID(r.Context())
 	for {
 		replay, err := s.store.ListEventsBySession(r.Context(), sessionID, *cursor, DefaultEventReplayLimit)
 		if err != nil {
@@ -539,7 +592,7 @@ func (s *Server) writeReplay(w http.ResponseWriter, r *http.Request, sessionID s
 			return err
 		}
 		for _, event := range replay {
-			if err := sse.WriteEventWithID(w, event.ID, event.Payload); err != nil {
+			if err := sse.WriteEventWithID(w, event.ID, sanitizeProtocolEventForUser(userID, event.Payload)); err != nil {
 				return err
 			}
 			*cursor = event.ID
@@ -584,7 +637,16 @@ func normalizeEventLimit(limit int) int {
 }
 
 func (s *Server) handleListWorkspaceSessions(w http.ResponseWriter, r *http.Request) {
-	workspaceID := r.PathValue("workspaceId")
+	userID := currentUserID(r.Context())
+	workspaceID, ok, err := s.existingWorkspaceIDFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
 	limit, _ := parseIntQuery(r, "limit", 20)
 	offset, _ := parseIntQuery(r, "offset", 0)
 	if limit <= 0 || limit > 100 {
@@ -598,5 +660,5 @@ func (s *Server) handleListWorkspaceSessions(w http.ResponseWriter, r *http.Requ
 	if sessions == nil {
 		sessions = []SessionProjection{}
 	}
-	writeJSON(w, map[string]any{"sessions": sessions, "limit": limit, "offset": offset})
+	writeJSON(w, map[string]any{"sessions": sanitizeSessionsForUser(userID, sessions), "limit": limit, "offset": offset})
 }

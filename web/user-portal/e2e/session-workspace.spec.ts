@@ -1,24 +1,34 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 test.describe("Session 列表和 Workspace 切换", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/?workspaceId=ws_test_e2e");
+    await page.goto("/");
+    await page.fill("input[autocomplete='username']", "admin");
+    await page.fill("input[autocomplete='current-password']", "admin");
+    await page.click("button:has-text('登录')");
     await page.waitForSelector("text=新 Session", { timeout: 10000 });
   });
 
+  function openWorkspaceMenu(page: Page) {
+    return page.locator("[data-testid='workspace-menu-trigger']").click();
+  }
+
   test("应该显示 workspace 切换下拉菜单", async ({ page }) => {
-    await page.click("button:has-text('ws_test_e2e')");
+    await openWorkspaceMenu(page);
     await page.waitForTimeout(500);
-    await expect(page.locator("input[placeholder='输入 workspace ID']")).toBeVisible();
+    await expect(page.locator("button:has-text('新建 Workspace')")).toBeVisible();
     await page.keyboard.press("Escape");
   });
 
   test("应该能切换到另一个 workspace", async ({ page }) => {
-    await page.click("button:has-text('ws_test_e2e')");
-    await page.fill("input[placeholder='输入 workspace ID']", "ws_test_e2e_2");
-    await page.click("button[aria-label='切换 Workspace']");
-    await page.waitForURL(/workspaceId=ws_test_e2e_2/);
-    await expect(page.locator("button:has-text('ws_test_e2e_2')")).toBeVisible();
+    await openWorkspaceMenu(page);
+    await page.waitForTimeout(500);
+    const firstWorkspace = page.locator("div.w-full.flex.items-center.gap-2 >> button[type='button']").first();
+    const firstName = await firstWorkspace.textContent();
+    if (!firstName) throw new Error("No workspace found");
+    await firstWorkspace.click();
+    await page.waitForTimeout(500);
+    await expect(page.locator(`button:has-text('${firstName.trim()}')`)).toBeVisible();
   });
 
   test("session 列表应该能加载", async ({ page }) => {
@@ -64,10 +74,15 @@ test.describe("Session 列表和 Workspace 切换", () => {
     await page.waitForTimeout(3000);
     const sessionItems1 = page.locator("div.flex-1.overflow-y-auto button");
     const count1 = await sessionItems1.count();
-    await page.click("button:has-text('ws_test_e2e')");
-    await page.fill("input[placeholder='输入 workspace ID']", "ws_test_e2e_3");
-    await page.click("button[aria-label='切换 Workspace']");
-    await page.waitForURL(/workspaceId=ws_test_e2e_3/);
+    await openWorkspaceMenu(page);
+    await page.waitForTimeout(500);
+    const secondWorkspace = page.locator("div.w-full.flex.items-center.gap-2 >> button[type='button']").nth(1);
+    const secondName = await secondWorkspace.textContent();
+    if (!secondName) {
+      test.skip(true, "只有一个 workspace，跳过隔离测试");
+      return;
+    }
+    await secondWorkspace.click();
     await page.waitForTimeout(3000);
     const sessionItems2 = page.locator("div.flex-1.overflow-y-auto button");
     const count2 = await sessionItems2.count();

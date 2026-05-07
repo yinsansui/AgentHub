@@ -152,13 +152,14 @@ ORDER BY m.created_at ASC, m.message_id ASC, b.block_index ASC
 	return messages, rows.Err()
 }
 
-func (s *Store) listWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error) {
+func (s *Store) listWorkspaces(ctx context.Context, ownerUserID string, limit, offset int) ([]WorkspaceProjection, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT id, name, description, metadata, created_at, updated_at
+SELECT id, name, owner_user_id
 FROM workspaces
-ORDER BY updated_at DESC, id ASC
-LIMIT $1 OFFSET $2
-`, limit, offset)
+WHERE owner_user_id = $1
+ORDER BY id ASC
+LIMIT $2 OFFSET $3
+`, ownerUserID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -174,29 +175,31 @@ LIMIT $1 OFFSET $2
 	return workspaces, rows.Err()
 }
 
-func (s *Store) createWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error) {
-	payload, err := json.Marshal(cloneMetadata(workspace.Metadata))
-	if err != nil {
-		return WorkspaceProjection{}, err
+func (s *Store) createWorkspace(ctx context.Context, ownerUserID, name string) (WorkspaceProjection, error) {
+	for range 3 {
+		workspaceID, err := newWorkspaceUUID()
+		if err != nil {
+			return WorkspaceProjection{}, err
+		}
+		saved, err := scanWorkspace(s.pool.QueryRow(ctx, `
+INSERT INTO workspaces (id, name, owner_user_id)
+VALUES ($1, $2, $3)
+RETURNING id, name, owner_user_id
+`, workspaceID, name, ownerUserID))
+		if isUniqueViolation(err) {
+			continue
+		}
+		return saved, err
 	}
-	row := s.pool.QueryRow(ctx, `
-INSERT INTO workspaces (id, name, description, metadata, updated_at)
-VALUES ($1, $2, $3, $4::jsonb, now())
-RETURNING id, name, description, metadata, created_at, updated_at
-`, workspace.WorkspaceID, workspace.Name, workspace.Description, payload)
-	saved, err := scanWorkspace(row)
-	if isUniqueViolation(err) {
-		return WorkspaceProjection{}, ErrWorkspaceExists
-	}
-	return saved, err
+	return WorkspaceProjection{}, ErrWorkspaceExists
 }
 
-func (s *Store) getWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error) {
+func (s *Store) getWorkspace(ctx context.Context, ownerUserID, workspaceID string) (WorkspaceProjection, bool, error) {
 	workspace, err := scanWorkspace(s.pool.QueryRow(ctx, `
-SELECT id, name, description, metadata, created_at, updated_at
+SELECT id, name, owner_user_id
 FROM workspaces
-WHERE id = $1
-`, workspaceID))
+WHERE owner_user_id = $1 AND id = $2
+`, ownerUserID, workspaceID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkspaceProjection{}, false, nil
 	}
@@ -206,17 +209,13 @@ WHERE id = $1
 	return workspace, true, nil
 }
 
-func (s *Store) updateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error) {
-	payload, err := json.Marshal(cloneMetadata(workspace.Metadata))
-	if err != nil {
-		return WorkspaceProjection{}, false, err
-	}
+func (s *Store) updateWorkspace(ctx context.Context, ownerUserID, workspaceID, name string) (WorkspaceProjection, bool, error) {
 	saved, err := scanWorkspace(s.pool.QueryRow(ctx, `
 UPDATE workspaces
-SET name = $2, description = $3, metadata = $4::jsonb, updated_at = now()
-WHERE id = $1
-RETURNING id, name, description, metadata, created_at, updated_at
-`, workspaceID, workspace.Name, workspace.Description, payload))
+SET name = $3
+WHERE owner_user_id = $1 AND id = $2
+RETURNING id, name, owner_user_id
+`, ownerUserID, workspaceID, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkspaceProjection{}, false, nil
 	}
@@ -226,9 +225,75 @@ RETURNING id, name, description, metadata, created_at, updated_at
 	return saved, true, nil
 }
 
-func (s *Store) deleteWorkspace(ctx context.Context, workspaceID string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM workspaces WHERE id = $1`, workspaceID)
+func (s *Store) deleteWorkspace(ctx context.Context, ownerUserID, workspaceID string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var ownedWorkspaceID string
+	err = tx.QueryRow(ctx, `
+SELECT id
+FROM workspaces
+WHERE owner_user_id = $1 AND id = $2
+FOR UPDATE
+`, ownerUserID, workspaceID).Scan(&ownedWorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	deleteStatements := []struct {
+		sql  string
+		args []any
+	}{
+		{sql: `
+DELETE FROM message_blocks b
+USING messages m
+WHERE b.session_id = m.session_id AND b.message_id = m.message_id AND m.workspace_id = $1
+`, args: []any{ownedWorkspaceID}},
+		{sql: `
+DELETE FROM llm_connection_models m
+USING llm_connections c
+WHERE m.connection_id = c.id AND c.workspace_id = $1
+`, args: []any{ownedWorkspaceID}},
+		{sql: `
+DELETE FROM skill_files f
+USING skill_definitions d
+WHERE f.skill_id = d.id AND d.source = $1 AND d.scope_type = 'workspace' AND d.scope_id = $2
+`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+		{sql: `
+DELETE FROM mcp_server_env e
+USING mcp_server_definitions d
+WHERE e.server_id = d.id AND d.source = $1 AND d.scope_type = 'workspace' AND d.scope_id = $2
+`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+		{sql: `DELETE FROM messages WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+		{sql: `DELETE FROM session_events WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+		{sql: `DELETE FROM session_runs WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+		{sql: `DELETE FROM sessions WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+		{sql: `DELETE FROM tasks WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+		{sql: `DELETE FROM llm_connections WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+		{sql: `DELETE FROM skill_definitions WHERE source = $1 AND scope_type = 'workspace' AND scope_id = $2`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+		{sql: `DELETE FROM mcp_server_definitions WHERE source = $1 AND scope_type = 'workspace' AND scope_id = $2`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+		{sql: `DELETE FROM workspace_tokens WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
+	}
+	for _, statement := range deleteStatements {
+		if _, err := tx.Exec(ctx, statement.sql, statement.args...); err != nil {
+			return false, err
+		}
+	}
+
+	tag, err := tx.Exec(ctx, `DELETE FROM workspaces WHERE owner_user_id = $1 AND id = $2`, ownerUserID, ownedWorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
@@ -240,22 +305,12 @@ type workspaceScanner interface {
 
 func scanWorkspace(row workspaceScanner) (WorkspaceProjection, error) {
 	var workspace WorkspaceProjection
-	var metadata []byte
 	if err := row.Scan(
-		&workspace.WorkspaceID,
+		&workspace.ID,
 		&workspace.Name,
-		&workspace.Description,
-		&metadata,
-		&workspace.CreatedAt,
-		&workspace.UpdatedAt,
+		&workspace.OwnerUserID,
 	); err != nil {
 		return WorkspaceProjection{}, err
-	}
-	if len(metadata) > 0 {
-		_ = json.Unmarshal(metadata, &workspace.Metadata)
-	}
-	if workspace.Metadata == nil {
-		workspace.Metadata = map[string]any{}
 	}
 	return workspace, nil
 }

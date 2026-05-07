@@ -49,19 +49,16 @@ func NewMemoryStore() *MemoryStore {
 
 func (s *MemoryStore) Ping(ctx context.Context) error { return nil }
 
-func (s *MemoryStore) ListWorkspaces(ctx context.Context, limit, offset int) ([]WorkspaceProjection, error) {
+func (s *MemoryStore) ListWorkspaces(ctx context.Context, ownerUserID string, limit, offset int) ([]WorkspaceProjection, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	all := make([]WorkspaceProjection, 0, len(s.workspaces))
 	for _, workspace := range s.workspaces {
-		all = append(all, cloneWorkspaceProjection(workspace))
-	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].UpdatedAt.Equal(all[j].UpdatedAt) {
-			return all[i].WorkspaceID < all[j].WorkspaceID
+		if workspace.OwnerUserID == ownerUserID {
+			all = append(all, cloneWorkspaceProjection(workspace))
 		}
-		return all[i].UpdatedAt.After(all[j].UpdatedAt)
-	})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
 	if offset >= len(all) {
 		return []WorkspaceProjection{}, nil
 	}
@@ -72,53 +69,97 @@ func (s *MemoryStore) ListWorkspaces(ctx context.Context, limit, offset int) ([]
 	return all[offset:end], nil
 }
 
-func (s *MemoryStore) CreateWorkspace(ctx context.Context, workspace WorkspaceProjection) (WorkspaceProjection, error) {
+func (s *MemoryStore) CreateWorkspace(ctx context.Context, ownerUserID, name string) (WorkspaceProjection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.workspaces[workspace.WorkspaceID]; exists {
-		return WorkspaceProjection{}, ErrWorkspaceExists
+	for range 3 {
+		workspaceID, err := newWorkspaceUUID()
+		if err != nil {
+			return WorkspaceProjection{}, err
+		}
+		if _, exists := s.workspaces[workspaceID]; exists {
+			continue
+		}
+		workspace := WorkspaceProjection{ID: workspaceID, Name: name, OwnerUserID: ownerUserID}
+		s.workspaces[workspaceID] = workspace
+		return cloneWorkspaceProjection(workspace), nil
 	}
-	now := time.Now().UTC()
-	workspace.CreatedAt = now
-	workspace.UpdatedAt = now
-	workspace.Metadata = cloneMetadata(workspace.Metadata)
-	s.workspaces[workspace.WorkspaceID] = workspace
-	return cloneWorkspaceProjection(workspace), nil
+	return WorkspaceProjection{}, ErrWorkspaceExists
 }
 
-func (s *MemoryStore) GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceProjection, bool, error) {
+func (s *MemoryStore) GetWorkspace(ctx context.Context, ownerUserID, workspaceID string) (WorkspaceProjection, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	workspace, ok := s.workspaces[workspaceID]
-	if !ok {
+	if !ok || workspace.OwnerUserID != ownerUserID {
 		return WorkspaceProjection{}, false, nil
 	}
 	return cloneWorkspaceProjection(workspace), true, nil
 }
 
-func (s *MemoryStore) UpdateWorkspace(ctx context.Context, workspaceID string, workspace WorkspaceProjection) (WorkspaceProjection, bool, error) {
+func (s *MemoryStore) UpdateWorkspace(ctx context.Context, ownerUserID, workspaceID, name string) (WorkspaceProjection, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, ok := s.workspaces[workspaceID]
-	if !ok {
+	if !ok || existing.OwnerUserID != ownerUserID {
 		return WorkspaceProjection{}, false, nil
 	}
-	existing.Name = workspace.Name
-	existing.Description = workspace.Description
-	existing.Metadata = cloneMetadata(workspace.Metadata)
-	existing.UpdatedAt = time.Now().UTC()
+	existing.Name = name
 	s.workspaces[workspaceID] = existing
 	return cloneWorkspaceProjection(existing), true, nil
 }
 
-func (s *MemoryStore) DeleteWorkspace(ctx context.Context, workspaceID string) (bool, error) {
+func (s *MemoryStore) DeleteWorkspace(ctx context.Context, ownerUserID, workspaceID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.workspaces[workspaceID]; !ok {
+	workspace, ok := s.workspaces[workspaceID]
+	if !ok || workspace.OwnerUserID != ownerUserID {
 		return false, nil
 	}
-	delete(s.workspaces, workspaceID)
+
+	deletedSessions := map[string]bool{}
+	for sessionID, session := range s.sessions {
+		if session.WorkspaceID == workspaceID {
+			deletedSessions[sessionID] = true
+			delete(s.sessions, sessionID)
+		}
+	}
+	for taskID, task := range s.tasks {
+		if task.WorkspaceID == workspaceID {
+			delete(s.tasks, taskID)
+		}
+	}
+	for sessionID := range deletedSessions {
+		delete(s.activeRuns, sessionID)
+		delete(s.events, sessionID)
+		delete(s.messages, sessionID)
+		delete(s.order, sessionID)
+	}
+	for runID, run := range s.runs {
+		if run.WorkspaceID == workspaceID || deletedSessions[run.SessionID] {
+			delete(s.runs, runID)
+		}
+	}
+	if connection, ok := s.llmConnections[workspaceID]; ok {
+		for key, model := range s.llmModels {
+			if model.ConnectionID == connection.ID {
+				delete(s.llmModels, key)
+			}
+		}
+		delete(s.llmConnections, workspaceID)
+	}
+	for key, skill := range s.skills {
+		if skill.Definition.Source == protocol.SkillSourceWorkspace && skill.Definition.ScopeType == "workspace" && skill.Definition.ScopeID == workspaceID {
+			delete(s.skills, key)
+		}
+	}
+	for key, server := range s.mcpServers {
+		if server.Definition.Source == protocol.SkillSourceWorkspace && server.Definition.ScopeType == "workspace" && server.Definition.ScopeID == workspaceID {
+			delete(s.mcpServers, key)
+		}
+	}
 	delete(s.workspaceToken, workspaceID)
+	delete(s.workspaces, workspaceID)
 	return true, nil
 }
 
@@ -126,14 +167,6 @@ func (s *MemoryStore) SaveWorkspaceToken(ctx context.Context, workspaceID, token
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.workspaceToken[workspaceID] = token
-	if _, ok := s.workspaces[workspaceID]; !ok {
-		now := time.Now().UTC()
-		s.workspaces[workspaceID] = WorkspaceProjection{WorkspaceID: workspaceID, Metadata: map[string]any{}, CreatedAt: now, UpdatedAt: now}
-		return nil
-	}
-	workspace := s.workspaces[workspaceID]
-	workspace.UpdatedAt = time.Now().UTC()
-	s.workspaces[workspaceID] = workspace
 	return nil
 }
 
@@ -650,7 +683,6 @@ func cloneMetadata(metadata map[string]any) map[string]any {
 }
 
 func cloneWorkspaceProjection(workspace WorkspaceProjection) WorkspaceProjection {
-	workspace.Metadata = cloneMetadata(workspace.Metadata)
 	return workspace
 }
 

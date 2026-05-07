@@ -194,10 +194,13 @@ export type MCPServerDefinitionWithEnv = {
 };
 
 export type WorkspaceProjection = {
-  workspaceId: string;
-  name?: string;
-  description?: string;
-  metadata?: Record<string, unknown>;
-  createdAt?: string;
-  updatedAt?: string;
+  id: string;
+  name: string;
+  ownerUserId: string;
+};
+
+export type CurrentUser = {
+  id: string;
+  username: string;
+  role: string;
 };

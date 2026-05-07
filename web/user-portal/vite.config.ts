@@ -10,6 +10,7 @@ export default defineConfig({
     port: 5174,
     strictPort: false,
     proxy: {
+      "/auth": proxyTarget,
       "/health": proxyTarget,
       "/workspaces": proxyTarget,
       "/sessions": proxyTarget
