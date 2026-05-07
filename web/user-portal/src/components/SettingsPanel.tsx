@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2, LayoutGrid, Pencil, AlertTriangle } from "lucide-react";
+import { Bot, ChevronDown, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2, LayoutGrid, Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles, WorkspaceProjection } from "../types";
@@ -48,11 +48,8 @@ type Props = {
   onDeleteMCP: (name: string) => void;
   onCloseMCPEditor: () => void;
   activeWorkspace: WorkspaceProjection | undefined;
-  workspaces: WorkspaceProjection[];
   onUpdateWorkspace: (id: string, name: string) => Promise<void>;
   onDeleteWorkspace: (id: string) => Promise<{ deleted: boolean; replacementWorkspace?: WorkspaceProjection }>;
-  onSelectWorkspace: (id: string) => void;
-  onLoadWorkspaces: () => Promise<void>;
 };
 
 type SettingsTabMeta = {
@@ -157,34 +154,28 @@ function SectionCard(props: { title: string; description?: string; actions?: Rea
 
 function WorkspaceSettingsCard({
   activeWorkspace,
-  workspaces,
   onUpdateWorkspace,
   onDeleteWorkspace,
-  onSelectWorkspace,
-  onLoadWorkspaces,
   onBack,
 }: {
   activeWorkspace: WorkspaceProjection | undefined;
-  workspaces: WorkspaceProjection[];
   onUpdateWorkspace: (id: string, name: string) => Promise<void>;
   onDeleteWorkspace: (id: string) => Promise<{ deleted: boolean; replacementWorkspace?: WorkspaceProjection }>;
-  onSelectWorkspace: (id: string) => void;
-  onLoadWorkspaces: () => Promise<void>;
   onBack: () => void;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
 
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   async function handleRenameSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!editingId) return;
+    if (!activeWorkspace) return;
     const name = editName.trim();
     if (!name) {
       setEditError("请输入 workspace 名称");
@@ -193,9 +184,8 @@ function WorkspaceSettingsCard({
     setEditLoading(true);
     setEditError(null);
     try {
-      await onUpdateWorkspace(editingId, name);
-      await onLoadWorkspaces();
-      setEditingId(null);
+      await onUpdateWorkspace(activeWorkspace.id, name);
+      setEditing(false);
       setEditName("");
     } catch (err) {
       setEditError(err instanceof Error ? err.message : "重命名失败");
@@ -205,24 +195,18 @@ function WorkspaceSettingsCard({
   }
 
   async function handleDeleteConfirm() {
-    if (!deletingId) return;
-    const workspace = workspaces.find((w) => w.id === deletingId);
-    if (!workspace) return;
-    if (confirmName.trim() !== workspace.name) {
+    if (!activeWorkspace) return;
+    if (confirmName.trim() !== activeWorkspace.name) {
       setDeleteError("输入的名称与 workspace 名称不一致");
       return;
     }
     setDeleteLoading(true);
     setDeleteError(null);
     try {
-      const result = await onDeleteWorkspace(deletingId);
-      await onLoadWorkspaces();
-      if (activeWorkspace?.id === deletingId) {
-        const nextId = result.replacementWorkspace?.id || workspaces.find((w) => w.id !== deletingId)?.id || "";
-        if (nextId) onSelectWorkspace(nextId);
-      }
-      setDeletingId(null);
+      await onDeleteWorkspace(activeWorkspace.id);
+      setDeleteOpen(false);
       setConfirmName("");
+      onBack();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "删除失败");
     } finally {
@@ -232,75 +216,71 @@ function WorkspaceSettingsCard({
 
   return (
     <PageShell>
-      <SectionCard title="Workspace 管理" description="查看、重命名或删除 workspace。删除操作不可恢复。">
-        <div className="settings-list">
-          {workspaces.map((workspace) => (
-            <div className="settings-list-row" key={workspace.id}>
-              {editingId === workspace.id ? (
-                <form onSubmit={handleRenameSubmit} className="flex items-center gap-2 px-3 py-2 flex-1">
-                  <input
-                    autoFocus
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="flex-1 text-[13px] px-2.5 py-1.5 rounded-lg bg-apple-bg shadow-none border border-black/[0.08]"
-                    placeholder="Workspace 名称"
-                  />
-                  {editError && <span className="text-apple-destructive-text text-[11px]">{editError}</span>}
-                  <button
-                    type="submit"
-                    disabled={editLoading}
-                    className="min-h-7 px-2.5 py-0 text-[12px] bg-apple-accent text-white shadow-none hover:bg-apple-accent-hover rounded-lg"
-                  >
-                    {editLoading ? "保存中…" : "保存"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setEditingId(null); setEditName(""); setEditError(null); }}
-                    className="min-h-7 px-2.5 py-0 text-[12px] bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 rounded-lg"
-                  >
-                    取消
-                  </button>
-                </form>
-              ) : (
-                <>
-                  <button type="button" className="settings-list-button">
-                    <LayoutGrid size={15} />
-                    <span>{workspace.name}</span>
-                    <small>{workspace.id === activeWorkspace?.id ? "当前" : ""}</small>
-                  </button>
-                  <div className="flex items-center gap-0.5 pr-1">
-                    <button
-                      type="button"
-                      className="w-7 h-7 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-accent rounded-md"
-                      aria-label="重命名"
-                      onClick={() => { setEditingId(workspace.id); setEditName(workspace.name); setEditError(null); }}
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      className="w-7 h-7 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-destructive rounded-md"
-                      aria-label="删除"
-                      onClick={() => { setDeletingId(workspace.id); setConfirmName(""); setDeleteError(null); }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </>
-              )}
+      <SectionCard title="当前 Workspace" description="Settings 只管理当前选中的 workspace。切换或新建 workspace 请返回工作台侧边栏。">
+        {!activeWorkspace ? (
+          <p className="empty-copy">当前没有可管理的 Workspace。</p>
+        ) : editing ? (
+          <form onSubmit={handleRenameSubmit} className="settings-form">
+            <Field label="名称" span>
+              <input
+                autoFocus
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Workspace 名称"
+              />
+            </Field>
+            {editError && <p className="login-error settings-field-span">{editError}</p>}
+            <div className="settings-form-footer">
+              <span>此名称仅影响当前 workspace。</span>
+              <div className="settings-card-actions">
+                <button
+                  type="button"
+                  onClick={() => { setEditing(false); setEditName(""); setEditError(null); }}
+                >
+                  取消
+                </button>
+                <button type="submit" disabled={editLoading} className="settings-primary-button">
+                  <Save size={14} />{editLoading ? "保存中…" : "保存"}
+                </button>
+              </div>
             </div>
-          ))}
-          {workspaces.length === 0 && <p className="empty-copy">暂无 Workspace。</p>}
-        </div>
+          </form>
+        ) : (
+          <div className="settings-list-row">
+            <button type="button" className="settings-list-button">
+              <LayoutGrid size={15} />
+              <span>{activeWorkspace.name}</span>
+              <small>{activeWorkspace.id}</small>
+            </button>
+            <div className="flex items-center gap-0.5 pr-1">
+              <button
+                type="button"
+                className="w-7 h-7 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-accent rounded-md"
+                aria-label="重命名"
+                onClick={() => { setEditing(true); setEditName(activeWorkspace.name); setEditError(null); }}
+              >
+                <Pencil size={12} />
+              </button>
+              <button
+                type="button"
+                className="w-7 h-7 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-destructive rounded-md"
+                aria-label="删除"
+                onClick={() => { setDeleteOpen(true); setConfirmName(""); setDeleteError(null); }}
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        )}
       </SectionCard>
 
-      {deletingId && (
+      {deleteOpen && activeWorkspace && (
         <SectionCard title="删除 Workspace" description="此操作将永久删除该 workspace 及其所有数据。">
           <div className="p-1">
             <p className="text-[13px] text-apple-fg mb-3">
               请输入 workspace 名称以确认删除：
               <span className="font-medium ml-1">
-                {workspaces.find((w) => w.id === deletingId)?.name}
+                {activeWorkspace.name}
               </span>
             </p>
             <input
@@ -315,7 +295,7 @@ function WorkspaceSettingsCard({
               <button
                 type="button"
                 className="min-h-7 px-2.5 py-0 text-[12px] bg-transparent shadow-none text-apple-fg-50 hover:bg-apple-fg-5 rounded-lg"
-                onClick={() => { setDeletingId(null); setConfirmName(""); setDeleteError(null); }}
+                onClick={() => { setDeleteOpen(false); setConfirmName(""); setDeleteError(null); }}
               >
                 取消
               </button>
@@ -342,7 +322,7 @@ export function SettingsPanel(props: Props) {
     models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel,
     skills, skillForm, setSkillForm, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen, onNewMCP, onLoadMCP, onSaveMCP, onDeleteMCP, onCloseMCPEditor,
-    activeWorkspace, workspaces, onUpdateWorkspace, onDeleteWorkspace, onSelectWorkspace, onLoadWorkspaces
+    activeWorkspace, onUpdateWorkspace, onDeleteWorkspace
   } = props;
 
   return (
@@ -494,11 +474,8 @@ export function SettingsPanel(props: Props) {
           {settingsTab === "workspace" && (
             <WorkspaceSettingsCard
               activeWorkspace={activeWorkspace}
-              workspaces={workspaces}
               onUpdateWorkspace={onUpdateWorkspace}
               onDeleteWorkspace={onDeleteWorkspace}
-              onSelectWorkspace={onSelectWorkspace}
-              onLoadWorkspaces={onLoadWorkspaces}
               onBack={onBack}
             />
           )}

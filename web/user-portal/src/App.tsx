@@ -134,6 +134,19 @@ export default function App() {
     void chat.loadSession(sessionId);
   }
 
+  async function handleUpdateCurrentWorkspace(id: string, name: string) {
+    await updateWorkspace(id, name);
+    await workspaceList.loadWorkspaces();
+  }
+
+  async function handleDeleteCurrentWorkspace(id: string) {
+    const result = await deleteWorkspace(id);
+    const nextId = result.replacementWorkspace?.id || workspaceList.workspaces.find((w) => w.id !== id)?.id || "";
+    await workspaceList.loadWorkspaces();
+    if (nextId) handleSelectWorkspace(nextId);
+    return result;
+  }
+
   if (!authChecked) {
     return <main className="login-shell"><p className="text-apple-fg-50">正在检查登录状态…</p></main>;
   }
@@ -179,11 +192,8 @@ export default function App() {
           onDeleteMCP={workspace.handleDeleteMCP}
           onCloseMCPEditor={workspace.handleCloseMCPEditor}
           activeWorkspace={workspaceList.workspaces.find((w) => w.id === activeWorkspaceId)}
-          workspaces={workspaceList.workspaces}
-          onUpdateWorkspace={async (id, name) => { await updateWorkspace(id, name); }}
-          onDeleteWorkspace={deleteWorkspace}
-          onSelectWorkspace={handleSelectWorkspace}
-          onLoadWorkspaces={workspaceList.loadWorkspaces}
+          onUpdateWorkspace={handleUpdateCurrentWorkspace}
+          onDeleteWorkspace={handleDeleteCurrentWorkspace}
         />
       </>
     );
