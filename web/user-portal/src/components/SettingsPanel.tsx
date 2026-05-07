@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2, LayoutGrid, Pencil } from "lucide-react";
+import { Bot, ChevronDown, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2, LayoutGrid } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles, WorkspaceProjection } from "../types";
@@ -163,7 +163,6 @@ function WorkspaceSettingsCard({
   onDeleteWorkspace: (id: string) => Promise<{ deleted: boolean; replacementWorkspace?: WorkspaceProjection }>;
   onBack: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
@@ -172,6 +171,11 @@ function WorkspaceSettingsCard({
   const [confirmName, setConfirmName] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  useEffect(() => {
+    setEditName(activeWorkspace?.name ?? "");
+    setEditError(null);
+  }, [activeWorkspace?.id, activeWorkspace?.name]);
 
   async function handleRenameSubmit(e: FormEvent) {
     e.preventDefault();
@@ -185,8 +189,6 @@ function WorkspaceSettingsCard({
     setEditError(null);
     try {
       await onUpdateWorkspace(activeWorkspace.id, name);
-      setEditing(false);
-      setEditName("");
     } catch (err) {
       setEditError(err instanceof Error ? err.message : "重命名失败");
     } finally {
@@ -216,14 +218,13 @@ function WorkspaceSettingsCard({
 
   return (
     <PageShell>
-      <SectionCard title="当前 Workspace" description="Settings 只管理当前选中的 workspace。切换或新建 workspace 请返回工作台侧边栏。">
+      <SectionCard title="Workspace">
         {!activeWorkspace ? (
           <p className="empty-copy">当前没有可管理的 Workspace。</p>
-        ) : editing ? (
+        ) : (
           <form onSubmit={handleRenameSubmit} className="settings-form">
             <Field label="名称" span>
               <input
-                autoFocus
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 placeholder="Workspace 名称"
@@ -231,46 +232,21 @@ function WorkspaceSettingsCard({
             </Field>
             {editError && <p className="login-error settings-field-span">{editError}</p>}
             <div className="settings-form-footer">
-              <span>此名称仅影响当前 workspace。</span>
+              <button
+                type="button"
+                className="settings-delete-button"
+                aria-label="删除 Workspace"
+                onClick={() => { setDeleteOpen(true); setConfirmName(""); setDeleteError(null); }}
+              >
+                <Trash2 size={14} />删除 Workspace
+              </button>
               <div className="settings-card-actions">
-                <button
-                  type="button"
-                  onClick={() => { setEditing(false); setEditName(""); setEditError(null); }}
-                >
-                  取消
-                </button>
                 <button type="submit" disabled={editLoading} className="settings-primary-button">
                   <Save size={14} />{editLoading ? "保存中…" : "保存"}
                 </button>
               </div>
             </div>
           </form>
-        ) : (
-          <div className="settings-list-row">
-            <button type="button" className="settings-list-button">
-              <LayoutGrid size={15} />
-              <span>{activeWorkspace.name}</span>
-              <small>{activeWorkspace.id}</small>
-            </button>
-            <div className="flex items-center gap-0.5 pr-1">
-              <button
-                type="button"
-                className="w-7 h-7 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-accent rounded-md"
-                aria-label="重命名"
-                onClick={() => { setEditing(true); setEditName(activeWorkspace.name); setEditError(null); }}
-              >
-                <Pencil size={12} />
-              </button>
-              <button
-                type="button"
-                className="w-7 h-7 p-0 bg-transparent shadow-none text-apple-fg-40 hover:text-apple-destructive rounded-md"
-                aria-label="删除"
-                onClick={() => { setDeleteOpen(true); setConfirmName(""); setDeleteError(null); }}
-              >
-                <Trash2 size={12} />
-              </button>
-            </div>
-          </div>
         )}
       </SectionCard>
 
@@ -302,6 +278,7 @@ function WorkspaceSettingsCard({
               <button
                 type="button"
                 disabled={deleteLoading}
+                aria-label="确认删除 Workspace"
                 className="min-h-7 px-2.5 py-0 text-[12px] bg-apple-destructive text-white shadow-none hover:opacity-90 rounded-lg"
                 onClick={handleDeleteConfirm}
               >

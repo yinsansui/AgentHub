@@ -56,8 +56,9 @@ test.describe("Workspace CRUD", () => {
     await page.waitForTimeout(500);
 
     await openWorkspaceSettings(page);
-    await expect(page.locator("div.settings-list-row", { hasText: firstName })).toBeVisible();
-    await expect(page.locator("div.settings-list-row", { hasText: secondName })).not.toBeVisible();
+    await expect(page.locator("input[placeholder='Workspace 名称']")).toHaveValue(firstName);
+    await expect(page.locator("text=Settings 只管理当前选中的 workspace")).not.toBeVisible();
+    await expect(page.locator("text=" + secondName)).not.toBeVisible();
   });
 
   test("应该在 Settings 中重命名和删除当前 workspace", async ({ page }) => {
@@ -66,7 +67,6 @@ test.describe("Workspace CRUD", () => {
 
     await createWorkspace(page, uniqueName);
     await openWorkspaceSettings(page);
-    await page.locator("button[aria-label='重命名']").click();
     await page.fill("input[placeholder='Workspace 名称']", renamedName);
     await page.click("button:has-text('保存')");
     await page.waitForTimeout(1000);
@@ -76,11 +76,11 @@ test.describe("Workspace CRUD", () => {
     await expect(page.locator("[data-testid='workspace-menu-trigger']", { hasText: renamedName })).toBeVisible();
 
     await openWorkspaceSettings(page);
-    await page.locator("button[aria-label='删除']").click();
-    await expect(page.locator("text=删除 Workspace")).toBeVisible();
+    await page.locator("button[aria-label='删除 Workspace']").click();
+    await expect(page.getByRole("heading", { name: "删除 Workspace" })).toBeVisible();
     await expect(page.locator("text=请输入 workspace 名称以确认删除")).toBeVisible();
     await page.fill("input[placeholder='输入 workspace 名称']", renamedName);
-    await page.click("button:has-text('删除')");
+    await page.locator("button[aria-label='确认删除 Workspace']").click();
     await page.waitForTimeout(1000);
 
     await expect(page.locator("[data-testid='workspace-menu-trigger']", { hasText: renamedName })).not.toBeVisible();
@@ -92,9 +92,9 @@ test.describe("Workspace CRUD", () => {
     await createWorkspace(page, `REMAIN-${Date.now()}`);
     const deletedId = await createWorkspace(page, deletedName);
     await openWorkspaceSettings(page);
-    await page.locator("button[aria-label='删除']").click();
+    await page.locator("button[aria-label='删除 Workspace']").click();
     await page.fill("input[placeholder='输入 workspace 名称']", deletedName);
-    await page.click("button:has-text('删除')");
+    await page.locator("button[aria-label='确认删除 Workspace']").click();
     await page.waitForTimeout(1000);
 
     expect(new URL(page.url()).searchParams.get("workspaceId")).not.toBe(deletedId);
@@ -106,9 +106,9 @@ test.describe("Workspace CRUD", () => {
 
     await createWorkspace(page, uniqueName);
     await openWorkspaceSettings(page);
-    await page.locator("button[aria-label='删除']").click();
+    await page.locator("button[aria-label='删除 Workspace']").click();
     await page.fill("input[placeholder='输入 workspace 名称']", "错误的名称");
-    await page.click("button:has-text('删除')");
+    await page.locator("button[aria-label='确认删除 Workspace']").click();
     await expect(page.locator("text=输入的名称与 workspace 名称不一致")).toBeVisible();
   });
 });
