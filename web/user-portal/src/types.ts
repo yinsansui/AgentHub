@@ -86,6 +86,7 @@ export type SessionRun = {
 
 export type SessionState = {
   sessionId: string;
+  modelId?: string;
   messages: MessageProjection[];
   activeRun?: SessionRun | null;
   latestEventId: number;
@@ -119,6 +120,7 @@ export type LLMConnection = {
   provider: string;
   apiProtocol: string;
   baseUrl: string;
+  defaultModelId?: string;
   createdAt?: string;
   updatedAt?: string;
 };

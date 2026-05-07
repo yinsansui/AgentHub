@@ -88,7 +88,7 @@ export async function getLLMConnection(workspaceId: string): Promise<{ connectio
 
 export async function saveLLMConnection(
   workspaceId: string,
-  body: { apiProtocol: string; baseUrl: string; apiKey: string }
+  body: { apiProtocol: string; baseUrl: string; apiKey: string; defaultModelId?: string }
 ): Promise<{ connection: LLMConnection; apiKeySet: boolean }> {
   return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/llm-connection`, {
     method: "PUT",

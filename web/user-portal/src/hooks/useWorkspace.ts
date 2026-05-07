@@ -121,14 +121,39 @@ export function useWorkspace(workspaceId: string) {
   async function handleSaveLLM(event: FormEvent) {
     event.preventDefault();
     try {
-      const payload = await saveLLMConnection(workspaceId, llmForm);
+      const payload = await saveLLMConnection(workspaceId, {
+        apiProtocol: llmForm.apiProtocol,
+        baseUrl: llmForm.baseUrl,
+        apiKey: llmForm.apiKey,
+        defaultModelId: llmConnection?.defaultModelId
+      });
       setLLMConnection(payload.connection);
       setApiKeySet(payload.apiKeySet);
       setLLMForm((c) => ({ ...c, apiKey: "" }));
-      setNotice({ tone: "success", text: "LLM 连接已保存" });
+      try {
+        const refreshed = await refreshModels(workspaceId);
+        setModels(refreshed);
+        setNotice({ tone: "success", text: "LLM 连接已保存，模型已刷新" });
+      } catch (refreshError) {
+        reportError(refreshError, "LLM 连接已保存，但自动刷新模型失败");
+      }
     } catch (error) {
       reportError(error, "保存 LLM 连接失败");
     }
+  }
+
+  async function saveDefaultModel(modelId: string) {
+    if (!llmConnection) {
+      throw new Error("请先保存 LLM 连接");
+    }
+    const payload = await saveLLMConnection(workspaceId, {
+      apiProtocol: llmConnection.apiProtocol,
+      baseUrl: llmConnection.baseUrl,
+      apiKey: "",
+      defaultModelId: modelId
+    });
+    setLLMConnection(payload.connection);
+    setApiKeySet(payload.apiKeySet);
   }
 
   async function handleRefreshModels() {
@@ -145,6 +170,9 @@ export function useWorkspace(workspaceId: string) {
     try {
       const saved = await upsertModel(workspaceId, modelId.trim(), enabled, source);
       setModels((c) => replaceBy(c, saved, (m) => m.modelId));
+      if (!saved.enabled && llmConnection?.defaultModelId === saved.modelId) {
+        await saveDefaultModel("");
+      }
     } catch (error) {
       reportError(error, "保存模型失败");
     }
@@ -152,8 +180,17 @@ export function useWorkspace(workspaceId: string) {
 
   async function handleManualModel(event: FormEvent) {
     event.preventDefault();
-    await handleUpsertModel(manualModelId, true, "manual");
+    const modelId = manualModelId.trim();
+    if (!modelId) return;
+    await handleUpsertModel(modelId, true, "manual");
     setManualModelId("");
+    if (!llmConnection?.defaultModelId) {
+      try {
+        await saveDefaultModel(modelId);
+      } catch (error) {
+        reportError(error, "设置默认模型失败");
+      }
+    }
   }
 
   function handleNewSkill() {
@@ -265,6 +302,14 @@ export function useWorkspace(workspaceId: string) {
     setMCPEditorOpen(false);
   }
 
+  async function handleSetDefaultModel(modelId: string) {
+    try {
+      await saveDefaultModel(modelId);
+    } catch (error) {
+      reportError(error, "设置默认模型失败");
+    }
+  }
+
   return {
     loadState, healthOk, pod, logs, showLogs, notice, setNotice,
     llmConnection, apiKeySet, llmForm, setLLMForm, models, manualModelId, setManualModelId,
@@ -272,7 +317,7 @@ export function useWorkspace(workspaceId: string) {
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen,
     refreshWorkspace,
     handleLoadLogs,
-    handleSaveLLM, handleRefreshModels, handleUpsertModel, handleManualModel,
+    handleSaveLLM, handleRefreshModels, handleUpsertModel, handleManualModel, handleSetDefaultModel,
     handleNewSkill, handleLoadSkill, handleSaveSkill, handleDeleteSkill, handleCloseSkillEditor,
     handleNewMCP, handleLoadMCP, handleSaveMCP, handleDeleteMCP, handleCloseMCPEditor
   };
