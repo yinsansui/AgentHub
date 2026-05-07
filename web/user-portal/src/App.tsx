@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getMe, logout } from "./api";
+import { getMe, logout, updateWorkspace, deleteWorkspace } from "./api";
 import { errorMessage, sessionStorageKey } from "./lib/utils";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useSessionList } from "./hooks/useSessionList";
@@ -13,7 +13,7 @@ import type { Notice } from "./hooks/useWorkspace";
 import type { CurrentUser, WorkspaceProjection } from "./types";
 
 type NavigationPanel = "sessions" | "settings";
-type SettingsTab = "llm" | "skills" | "mcp";
+type SettingsTab = "llm" | "skills" | "mcp" | "workspace";
 
 function resolveInitialWorkspaceId(workspaces: WorkspaceProjection[]): string {
   const params = new URLSearchParams(window.location.search);
@@ -178,6 +178,12 @@ export default function App() {
           onSaveMCP={workspace.handleSaveMCP}
           onDeleteMCP={workspace.handleDeleteMCP}
           onCloseMCPEditor={workspace.handleCloseMCPEditor}
+          activeWorkspace={workspaceList.workspaces.find((w) => w.id === activeWorkspaceId)}
+          workspaces={workspaceList.workspaces}
+          onUpdateWorkspace={async (id, name) => { await updateWorkspace(id, name); }}
+          onDeleteWorkspace={deleteWorkspace}
+          onSelectWorkspace={handleSelectWorkspace}
+          onLoadWorkspaces={workspaceList.loadWorkspaces}
         />
       </>
     );
