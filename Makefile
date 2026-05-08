@@ -1,4 +1,4 @@
-.PHONY: fmt check build-control-plane build-agent-pod build-ts-runtime-host build-linux-bins image-agent-pod image-control-plane images smoke-real-runtime smoke-cancel-lifecycle
+.PHONY: fmt check dev stop-dev restart-dev build-control-plane build-agent-pod build-ts-runtime-host build-linux-bins image-agent-pod image-control-plane images smoke-real-runtime smoke-cancel-lifecycle
 
 fmt:
 	gofmt -w cmd internal pkg
@@ -6,6 +6,15 @@ fmt:
 check: fmt
 	go test ./...
 	cd runtimes/ts-runtime-host && npm ci && npm run build
+
+dev:
+	./scripts/start-dev.sh
+
+stop-dev:
+	./scripts/stop-dev.sh
+
+restart-dev:
+	./scripts/restart-dev.sh
 
 build-control-plane:
 	go build ./cmd/control-plane
