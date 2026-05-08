@@ -204,6 +204,12 @@ export async function listSessions(workspaceId: string, limit: number, offset: n
   return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/sessions?limit=${limit}&offset=${offset}`);
 }
 
+export async function deleteSession(sessionId: string): Promise<{ deleted: boolean }> {
+  return apiRequest(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function createSession(workspaceId: string, body: { modelId?: string; firstTurn?: { message: string; source: "user" } }): Promise<CreateSessionResponse> {
   return apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/sessions`, {
     method: "POST",

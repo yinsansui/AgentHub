@@ -42,5 +42,10 @@ export function useSessionList(workspaceId: string) {
     setSessionList((prev) => [session, ...prev.filter((s) => s.sessionId !== session.sessionId)]);
   }, []);
 
-  return { sessionList, sessionListHasMore, loading, error, loadMoreSessions, resetSessions, prependSession };
+  const removeSession = useCallback((sessionId: string) => {
+    setSessionList((prev) => prev.filter((session) => session.sessionId !== sessionId));
+    setSessionListOffset((offset) => Math.max(0, offset - 1));
+  }, []);
+
+  return { sessionList, sessionListHasMore, loading, error, loadMoreSessions, resetSessions, prependSession, removeSession };
 }
