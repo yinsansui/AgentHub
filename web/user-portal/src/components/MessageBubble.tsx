@@ -1,16 +1,20 @@
+import { Bot, UserRound } from "lucide-react";
 import type { MessageProjection, UniversalBlock } from "../types";
 
 export function MessageBubble({ message }: { message: MessageProjection }) {
   const isUser = message.role === "user";
+  const senderName = isUser ? "你" : message.status === "streaming" ? "Agent 生成中" : "Agent";
+  const messageTime = formatMessageTime(message.createdAt || message.updatedAt);
   return (
     <article className={`w-[min(840px,100%)] mx-auto ${isUser ? "flex justify-end py-3.5 pb-2" : "py-0.5"}`}>
       <div className={isUser ? "max-w-[min(80%,660px)] px-4 py-[11px] rounded-[18px] bg-black/[0.06] overflow-wrap-anywhere max-[700px]:max-w-full" : "rounded-2xl bg-apple-panel shadow-[0_1px_4px_rgba(0,0,0,0.06)] px-4 py-3.5"}>
-        {!isUser && (
-          <header className="flex justify-between gap-3 mb-2 text-apple-fg-50 text-xs">
-            <span className="font-semibold text-apple-fg">{message.status === "streaming" ? "生成中" : "Agent 回复"}</span>
-            <small>{message.runId}</small>
-          </header>
-        )}
+        <header className={`flex items-center gap-2 mb-2 text-xs text-apple-fg-50 ${isUser ? "justify-end" : "justify-between"}`}>
+          <span className="inline-flex items-center gap-1.5 font-semibold text-apple-fg">
+            {isUser ? <UserRound size={13} /> : <Bot size={13} />}
+            {senderName}
+          </span>
+          <span>{messageTime}</span>
+        </header>
         <div className="grid gap-2">
           {message.blocks.map((block, index) => <BlockView key={`${message.messageId}-${index}`} block={block} />)}
           {message.error && <div className="block error-block">{message.error.message}</div>}
@@ -18,6 +22,20 @@ export function MessageBubble({ message }: { message: MessageProjection }) {
       </div>
     </article>
   );
+}
+
+function formatMessageTime(value?: string): string {
+  if (!value) return "刚刚";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "刚刚";
+  return date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function BlockView({ block }: { block: UniversalBlock }) {

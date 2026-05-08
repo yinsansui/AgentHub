@@ -29,6 +29,7 @@ export function useChat(
   });
   const [messageDraft, setMessageDraft] = useState("");
   const [selectedModelId, setSelectedModelId] = useState("");
+  const [isSubmittingTurn, setIsSubmittingTurn] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -125,6 +126,7 @@ export function useChat(
 
   function resetWorkbench() {
     disconnectStream();
+    setIsSubmittingTurn(false);
     setWorkbench({
       workspaceId,
       messages: [],
@@ -138,7 +140,8 @@ export function useChat(
     event.preventDefault();
     if (!workspaceId) return;
     const message = messageDraft.trim();
-    if (!message || workbench.activeRun) return;
+    if (!message || workbench.activeRun || isSubmittingTurn) return;
+    setIsSubmittingTurn(true);
     try {
       if (!workbench.sessionId) {
         const response = await createSession(workspaceId, {
@@ -169,6 +172,8 @@ export function useChat(
       } else {
         onError(error, "发送消息失败");
       }
+    } finally {
+      setIsSubmittingTurn(false);
     }
   }
 
@@ -198,6 +203,7 @@ export function useChat(
     workbench, setWorkbench,
     messageDraft, setMessageDraft,
     selectedModelId, setSelectedModelId,
+    isSubmittingTurn,
     disconnectStream, loadSession, resetWorkbench,
     handleCreateOrTurn, handleStop
   };

@@ -71,7 +71,9 @@ function messageFromEvent(event: UniversalEvent, status: MessageProjection["stat
     role: event.role || "assistant",
     status,
     blocks: event.content ?? [],
-    error: event.error
+    error: event.error,
+    createdAt: event.timestamp,
+    updatedAt: event.timestamp
   };
 }
 
@@ -85,7 +87,12 @@ function upsertMessage(messages: MessageProjection[], incoming: MessageProjectio
     return [...messages, incoming];
   }
   const next = messages.slice();
-  next[index] = { ...next[index], ...incoming };
+  next[index] = {
+    ...next[index],
+    ...incoming,
+    createdAt: next[index].createdAt ?? incoming.createdAt,
+    updatedAt: incoming.updatedAt ?? next[index].updatedAt
+  };
   return next;
 }
 
@@ -104,13 +111,15 @@ function updateMessageBlock(messages: MessageProjection[], event: UniversalEvent
           runId: event.runId,
           role: event.role || "assistant",
           status: "streaming",
-          blocks: []
+          blocks: [],
+          createdAt: event.timestamp,
+          updatedAt: event.timestamp
         };
 
   const blocks = message.blocks.slice();
   const existing = blocks[index] ?? blockPlaceholder(event.type);
   blocks[index] = mergeBlock(existing, event);
-  const updated = { ...message, status: event.type.endsWith(".completed") ? message.status : "streaming", blocks };
+  const updated = { ...message, status: event.type.endsWith(".completed") ? message.status : "streaming", blocks, updatedAt: event.timestamp ?? message.updatedAt };
 
   if (messageIndex < 0) {
     return [...messages, updated];

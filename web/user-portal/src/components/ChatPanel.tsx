@@ -1,7 +1,7 @@
-import { ArrowUp, ChevronDown, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, CircleStop, Plus } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { LLMModel, WorkbenchState } from "../types";
+import type { LLMModel, MessageProjection, WorkbenchState } from "../types";
 import { MessageBubble } from "./MessageBubble";
 
 type Props = {
@@ -14,6 +14,7 @@ type Props = {
   setSelectedModelId: (v: string) => void;
   onSubmit: (e: FormEvent) => void;
   onStop: () => void;
+  isSubmittingTurn: boolean;
 };
 
 function ModelDropdown({
@@ -191,26 +192,54 @@ export function ChatPanel({
   workbench, enabledModels, defaultModelId,
   messageDraft, setMessageDraft,
   selectedModelId, setSelectedModelId,
-  onSubmit
+  onSubmit, onStop, isSubmittingTurn
 }: Props) {
   const hasModel = workbench.sessionId
     ? Boolean(workbench.modelId)
     : Boolean(defaultModelId || selectedModelId);
-  const canSend = messageDraft.trim() !== "" && !workbench.activeRun && hasModel;
+  const canSend = messageDraft.trim() !== "" && !workbench.activeRun && !isSubmittingTurn && hasModel;
   const modelHint = enabledModels.length === 0
     ? "请先在设置中配置并启用至少一个模型"
     : "请选择一个模型，或在设置中设为默认模型";
+
+  const activeRunId = workbench.activeRun?.runId;
+  const canStop = Boolean(activeRunId) && workbench.activeRun?.status !== "cancelling";
+  const hasAssistantMessageForRun = activeRunId
+    ? workbench.messages.some((m) => m.role === "assistant" && m.runId === activeRunId)
+    : false;
+  const showWaiting = isSubmittingTurn || (Boolean(activeRunId) && !hasAssistantMessageForRun);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [workbench.messages, workbench.latestEventId, activeRunId, showWaiting]);
+
+  const waitingBubble: MessageProjection | null = showWaiting
+    ? {
+        messageId: "__waiting__",
+        role: "assistant",
+        status: "streaming",
+        runId: activeRunId,
+        createdAt: new Date().toISOString(),
+        blocks: [{ type: "text", text: "Agent 正在思考…" }],
+      }
+    : null;
 
   return (
     <>
       {workbench.systemError && <div className="notice error">{workbench.systemError}</div>}
 
-      <div className="conversation-mask">
-        <div className="h-full overflow-auto px-5 py-[30px] pb-9 flex flex-col gap-2.5">
+      <div className="conversation-mask flex-1">
+        <div
+          ref={scrollRef}
+          data-testid="conversation-scroll"
+          className="h-full min-h-0 overflow-auto px-5 py-[30px] pb-9 flex flex-col gap-2.5"
+        >
           {workbench.messages.map((message) => (
             <MessageBubble key={message.messageId} message={message} />
           ))}
-          {workbench.messages.length === 0 && (
+          {waitingBubble && <MessageBubble key="__waiting__" message={waitingBubble} />}
+          {workbench.messages.length === 0 && !showWaiting && (
             <div className="w-[min(640px,100%)] min-h-[260px] mx-auto grid place-items-center content-center gap-2 text-center text-apple-fg-50">
               <h3 className="text-apple-fg text-lg">有什么我可以帮你的？</h3>
             </div>
@@ -218,7 +247,7 @@ export function ChatPanel({
         </div>
       </div>
 
-      <form className="mx-auto w-[min(840px,calc(100%-40px))] py-3 pb-4 max-[700px]:w-[calc(100%-24px)]" onSubmit={onSubmit}>
+      <form className="mx-auto w-[min(840px,calc(100%-40px))] shrink-0 py-3 pb-4 max-[700px]:w-[calc(100%-24px)]" onSubmit={onSubmit}>
         <div className="bg-apple-panel shadow-apple-card rounded-[18px] px-3.5 pt-3.5 pb-2.5 flex flex-col gap-2.5">
           <textarea
             className="min-h-[72px] max-h-[200px] rounded-none p-0 bg-transparent shadow-none resize-none border-none outline-none text-[15px] leading-normal"
@@ -244,9 +273,15 @@ export function ChatPanel({
                 lockedModelId={workbench.sessionId ? workbench.modelId : undefined}
               />
             </div>
-            <button type="submit" className="w-8 h-8 min-h-8 p-0 rounded-full bg-apple-accent shadow-none text-white transition-opacity duration-[120ms] ease-out hover:bg-apple-accent-hover hover:text-white disabled:bg-black/15 disabled:text-black/35 disabled:opacity-100" disabled={!canSend} aria-label="发送">
-              <ArrowUp size={16} />
-            </button>
+            {activeRunId ? (
+              <button type="button" className="w-8 h-8 min-h-8 p-0 rounded-full bg-apple-destructive shadow-none text-white transition-opacity duration-[120ms] ease-out hover:bg-apple-destructive hover:text-white disabled:bg-black/15 disabled:text-black/35 disabled:opacity-100" disabled={!canStop} aria-label={canStop ? "停止生成" : "正在停止"} onClick={onStop}>
+                <CircleStop size={16} />
+              </button>
+            ) : (
+              <button type="submit" className="w-8 h-8 min-h-8 p-0 rounded-full bg-apple-accent shadow-none text-white transition-opacity duration-[120ms] ease-out hover:bg-apple-accent-hover hover:text-white disabled:bg-black/15 disabled:text-black/35 disabled:opacity-100" disabled={!canSend} aria-label="发送">
+                <ArrowUp size={16} />
+              </button>
+            )}
           </div>
           {!hasModel && !workbench.sessionId && (
             <p className="text-[12px] text-apple-fg-50 -mt-1">{modelHint}</p>
