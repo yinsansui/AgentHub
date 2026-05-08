@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getMe, logout, updateWorkspace, deleteWorkspace } from "./api";
+import { getMe, logout, updateWorkspace, deleteWorkspace, deleteSession } from "./api";
 import { errorMessage, sessionStorageKey } from "./lib/utils";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useSessionList } from "./hooks/useSessionList";
@@ -134,6 +134,27 @@ export default function App() {
     void chat.loadSession(sessionId);
   }
 
+  async function handleDeleteSession(sessionId: string) {
+    if (chat.workbench.sessionId === sessionId && chat.workbench.activeRun) {
+      workspace.setNotice({ tone: "error", text: "请先停止当前生成，再删除这个 session" });
+      return;
+    }
+    try {
+      await deleteSession(sessionId);
+      sessions.removeSession(sessionId);
+      if (chat.workbench.sessionId === sessionId) {
+        chat.disconnectStream();
+        chat.resetWorkbench();
+        if (currentUser && activeWorkspaceId) {
+          sessionStorage.removeItem(sessionStorageKey(currentUser.id, activeWorkspaceId));
+        }
+      }
+      workspace.setNotice({ tone: "success", text: "Session 已删除" });
+    } catch (error) {
+      reportError(error, "删除 session 失败");
+    }
+  }
+
   async function handleUpdateCurrentWorkspace(id: string, name: string) {
     await updateWorkspace(id, name);
     await workspaceList.loadWorkspaces();
@@ -224,6 +245,7 @@ export default function App() {
             sessionListError={sessions.error}
             activeSessionId={chat.workbench.sessionId}
             onLoadSession={handleLoadSession}
+            onDeleteSession={handleDeleteSession}
             onLoadMore={() => void sessions.loadMoreSessions()}
             onNewSession={handleNewSession}
             onOpenSettings={() => setActivePanel("settings")}
@@ -231,7 +253,7 @@ export default function App() {
             onLogout={() => void handleLogout()}
           />
         </aside>
-        <section className="min-w-0 min-h-0 bg-apple-panel shadow-apple-card overflow-hidden rounded-2xl grid grid-rows-[auto_minmax(0,1fr)_auto] relative max-[700px]:rounded-none max-[700px]:min-h-[78vh]">
+        <section className="min-w-0 min-h-0 bg-apple-panel shadow-apple-card overflow-hidden rounded-2xl flex flex-col relative max-[700px]:rounded-none max-[700px]:min-h-[78vh]">
           <ChatPanel
             workbench={chat.workbench}
             enabledModels={enabledModels}
@@ -242,6 +264,7 @@ export default function App() {
             setSelectedModelId={chat.setSelectedModelId}
             onSubmit={chat.handleCreateOrTurn}
             onStop={chat.handleStop}
+            isSubmittingTurn={chat.isSubmittingTurn}
           />
         </section>
       </main>
