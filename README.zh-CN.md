@@ -48,15 +48,20 @@ Go 服务把可执行入口保持在 `cmd/*`，业务逻辑放在 `internal/*`�
 - `curl`，本地启动脚本会用它做 readiness check。
 - 未设置 `AGENTHUB_DATABASE_URL` 时，本地脚本会启动 PostgreSQL。默认本地示例使用用户 `agenthub`、密码 `agenthub`、数据库 `agenthub`、端口 `5432`。
 
-## 快速开始
+## 5 分钟首次启动
 
-启动本地开发栈：
+克隆仓库，创建本地环境文件，然后启动开发栈：
 
 ```bash
-./scripts/start-dev.sh
+git clone <your-agenthub-repo-url>
+cd AgentHub
+cp .env.example .env
+make dev
 ```
 
-默认情况下，脚本会构建 TypeScript runtime host 和 Go binary，使用 Docker 启动本地 PostgreSQL，然后启动：
+仓库内置的 `.env.example` 可直接用于默认本地原型。只有当你要改端口、使用外部 PostgreSQL，或运行真实 LLM smoke test 时，才需要编辑 `.env`。
+
+默认情况下，`make dev` 会运行 `scripts/start-dev.sh`。脚本会加载 `.env`，构建 TypeScript runtime host 和 Go binary，在 `AGENTHUB_DATABASE_URL` 为空时使用 Docker 启动本地 PostgreSQL，然后启动：
 
 ```text
 ControlPlane: http://127.0.0.1:3000
@@ -67,7 +72,7 @@ Login:        admin / admin
 
 打开 `http://127.0.0.1:5174`，使用 `admin` / `admin` 登录。这组账号只用于本地原型。
 
-在启动终端按 `Ctrl+C` 会停止服务。除非设置了 `AGENTHUB_KEEP_POSTGRES=1`，脚本也会停止它启动的 PostgreSQL container。
+在启动终端按 `Ctrl+C` 会停止服务，也可以在另一个终端运行 `make stop-dev`。除非设置了 `AGENTHUB_KEEP_POSTGRES=1`，脚本也会停止它启动的 PostgreSQL container。
 
 ## 手动运行与验证
 
@@ -112,8 +117,10 @@ make smoke-real-runtime
 - `AGENTHUB_POSTGRES_PORT`，默认 `5432`。
 - `AGENTHUB_DATABASE_URL`，默认空。为空时，`scripts/start-dev.sh` 会启动 Docker PostgreSQL，并使用 `postgres://agenthub:agenthub@127.0.0.1:5432/agenthub?sslmode=disable`。
 - `AGENTHUB_INTERNAL_TOKEN`，默认 `dev-token`，用于本地 control plane 和 AgentPod 通信。
-- `AGENTHUB_RUNTIME_COMMAND`，AgentPod 用它启动 runtime host，例如 `node $(pwd)/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent`。
+- `AGENTHUB_RUNTIME_COMMAND`，可选。未设置时，`scripts/start-dev.sh` 会使用 `node <repo>/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent`。
 - `AGENTHUB_USER_PORTAL_PROXY_TARGET`，Vite user portal 用它把 API 请求代理到其他 control plane。
+
+完整本地启动模板见 [.env.example](.env.example)。
 
 Workspace LLM connection 设置通过 control plane API 管理，不需要手工编辑 runtime host 环境变量。当前相关 API 包括：
 

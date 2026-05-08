@@ -48,15 +48,20 @@ For a deeper design note, see [docs/architecture.md](docs/architecture.md).
 - `curl`, used by the local startup script for readiness checks.
 - PostgreSQL is started by the local script when `AGENTHUB_DATABASE_URL` is not set. The local example uses user `agenthub`, password `agenthub`, database `agenthub`, and port `5432`.
 
-## Quick start
+## 5-minute first run
 
-Start the local development stack:
+Clone the repo, create a local environment file, and start the development stack:
 
 ```bash
-./scripts/start-dev.sh
+git clone <your-agenthub-repo-url>
+cd AgentHub
+cp .env.example .env
+make dev
 ```
 
-By default the script builds the TypeScript runtime host and Go binaries, starts local PostgreSQL in Docker, then starts:
+The checked-in `.env.example` works for the default local prototype. You only need to edit `.env` when changing ports, using an external PostgreSQL database, or running the real LLM smoke test.
+
+By default `make dev` runs `scripts/start-dev.sh`. The script loads `.env`, builds the TypeScript runtime host and Go binaries, starts local PostgreSQL in Docker when `AGENTHUB_DATABASE_URL` is empty, then starts:
 
 ```text
 ControlPlane: http://127.0.0.1:3000
@@ -67,7 +72,7 @@ Login:        admin / admin
 
 Open `http://127.0.0.1:5174` and log in with `admin` / `admin`. These credentials are only for the local prototype.
 
-Press `Ctrl+C` in the startup terminal to stop the services. The script stops its PostgreSQL container unless `AGENTHUB_KEEP_POSTGRES=1` is set.
+Press `Ctrl+C` in the startup terminal to stop the services, or run `make stop-dev` from another terminal. The script stops its PostgreSQL container unless `AGENTHUB_KEEP_POSTGRES=1` is set.
 
 ## Manual run and verification
 
@@ -112,8 +117,10 @@ Useful local environment variables:
 - `AGENTHUB_POSTGRES_PORT`, default `5432`.
 - `AGENTHUB_DATABASE_URL`, default empty. When empty, `scripts/start-dev.sh` starts Docker PostgreSQL and uses `postgres://agenthub:agenthub@127.0.0.1:5432/agenthub?sslmode=disable`.
 - `AGENTHUB_INTERNAL_TOKEN`, default `dev-token`, used between the local control plane and AgentPod.
-- `AGENTHUB_RUNTIME_COMMAND`, used by AgentPod to start the runtime host, for example `node $(pwd)/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent`.
+- `AGENTHUB_RUNTIME_COMMAND`, optional. When unset, `scripts/start-dev.sh` uses `node <repo>/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent`.
 - `AGENTHUB_USER_PORTAL_PROXY_TARGET`, used by the Vite user portal to proxy API calls to another control plane.
+
+See [.env.example](.env.example) for the complete local startup template.
 
 Workspace LLM connection settings are managed through the control plane API, not by hand editing runtime host environment variables. Current related APIs include:
 
