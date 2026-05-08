@@ -2,6 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "${ROOT_DIR}/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
+
 CONTROL_PLANE_PORT="${AGENTHUB_CONTROL_PLANE_PORT:-3000}"
 AGENT_POD_PORT="${AGENTHUB_AGENT_POD_PORT:-3001}"
 USER_PORTAL_PORT="${AGENTHUB_USER_PORTAL_PORT:-5174}"

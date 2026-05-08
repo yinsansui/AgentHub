@@ -1,6 +1,7 @@
 .DS_Store
 .idea/
 .agenthub/
+.env
 *.log
 
 # TypeScript runtime host build artifacts

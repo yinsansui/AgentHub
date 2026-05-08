@@ -2,6 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "${ROOT_DIR}/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
+
 CONTROL_PLANE_PORT="${AGENTHUB_CONTROL_PLANE_PORT:-3000}"
 AGENT_POD_PORT="${AGENTHUB_AGENT_POD_PORT:-3001}"
 USER_PORTAL_PORT="${AGENTHUB_USER_PORTAL_PORT:-5174}"
@@ -13,6 +21,8 @@ SKIP_BUILD="${AGENTHUB_SKIP_BUILD:-0}"
 KEEP_POSTGRES="${AGENTHUB_KEEP_POSTGRES:-0}"
 LOG_DIR="${AGENTHUB_DEV_LOG_DIR:-${ROOT_DIR}/.agenthub/dev-logs}"
 BIN_DIR="${ROOT_DIR}/.agenthub/bin"
+DEFAULT_RUNTIME_COMMAND="node ${ROOT_DIR}/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent"
+RUNTIME_COMMAND="${AGENTHUB_RUNTIME_COMMAND:-${DEFAULT_RUNTIME_COMMAND}}"
 
 CONTROL_PLANE_URL="http://127.0.0.1:${CONTROL_PLANE_PORT}"
 AGENT_POD_URL="http://127.0.0.1:${AGENT_POD_PORT}"
@@ -145,7 +155,7 @@ require_http_down "${AGENT_POD_URL}/health" "AgentPod"
   AGENT_POD_ADDR=":${AGENT_POD_PORT}" \
   WORKSPACE_DIR="${ROOT_DIR}/.agenthub/workspaces" \
   AGENTHUB_INTERNAL_TOKEN="${INTERNAL_TOKEN}" \
-  AGENTHUB_RUNTIME_COMMAND="node ${ROOT_DIR}/runtimes/ts-runtime-host/dist/main.js --adapter pi-coding-agent" \
+  AGENTHUB_RUNTIME_COMMAND="${RUNTIME_COMMAND}" \
   "${BIN_DIR}/agent-pod" >"${LOG_DIR}/agent-pod.log" 2>&1
 ) &
 AGENT_POD_PID=$!
