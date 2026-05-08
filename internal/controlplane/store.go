@@ -43,6 +43,7 @@ type EventStore interface {
 	CreateSession(ctx context.Context, workspaceID, taskID, sessionID string, req protocol.CreateSessionRequest) (TaskProjection, SessionProjection, error)
 	GetSession(ctx context.Context, sessionID string) (SessionProjection, bool, error)
 	ListWorkspaceSessions(ctx context.Context, workspaceID string, limit, offset int) ([]SessionProjection, error)
+	DeleteSession(ctx context.Context, ownerUserID, sessionID string) (DeleteSessionResult, error)
 	GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error)
 	UpsertWorkspaceLLMConnection(ctx context.Context, workspaceID string, connection LLMConnection) (LLMConnection, error)
 	ListWorkspaceLLMModels(ctx context.Context, workspaceID string) ([]LLMConnectionModel, error)
@@ -165,6 +166,11 @@ type RunInterruptResult struct {
 	ExpectedRunID string      `json:"expectedRunId"`
 	ActiveRun     *SessionRun `json:"activeRun,omitempty"`
 	Run           *SessionRun `json:"run,omitempty"`
+}
+
+type DeleteSessionResult struct {
+	Deleted   bool        `json:"deleted"`
+	ActiveRun *SessionRun `json:"activeRun,omitempty"`
 }
 
 type SkillDefinition struct {
@@ -513,6 +519,10 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (SessionProjec
 
 func (s *Store) ListWorkspaceSessions(ctx context.Context, workspaceID string, limit, offset int) ([]SessionProjection, error) {
 	return s.listWorkspaceSessions(ctx, workspaceID, limit, offset)
+}
+
+func (s *Store) DeleteSession(ctx context.Context, ownerUserID, sessionID string) (DeleteSessionResult, error) {
+	return s.deleteSession(ctx, ownerUserID, sessionID)
 }
 
 func (s *Store) GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {

@@ -233,6 +233,47 @@ func (s *MemoryStore) ListWorkspaceSessions(ctx context.Context, workspaceID str
 	return all[offset:end], nil
 }
 
+func (s *MemoryStore) DeleteSession(ctx context.Context, ownerUserID, sessionID string) (DeleteSessionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return DeleteSessionResult{Deleted: false}, nil
+	}
+	workspace, ok := s.workspaces[session.WorkspaceID]
+	if !ok || workspace.OwnerUserID != ownerUserID {
+		return DeleteSessionResult{Deleted: false}, nil
+	}
+	if activeRunID := s.activeRuns[sessionID]; activeRunID != "" {
+		active := s.runs[activeRunID]
+		if active.RunID != "" && !isTerminalRunStatus(active.Status) {
+			return DeleteSessionResult{Deleted: false, ActiveRun: &active}, nil
+		}
+	}
+
+	delete(s.sessions, sessionID)
+	delete(s.activeRuns, sessionID)
+	delete(s.events, sessionID)
+	delete(s.messages, sessionID)
+	delete(s.order, sessionID)
+	for runID, run := range s.runs {
+		if run.SessionID == sessionID {
+			delete(s.runs, runID)
+		}
+	}
+	hasRemainingSessionForTask := false
+	for _, other := range s.sessions {
+		if other.TaskID == session.TaskID {
+			hasRemainingSessionForTask = true
+			break
+		}
+	}
+	if !hasRemainingSessionForTask {
+		delete(s.tasks, session.TaskID)
+	}
+	return DeleteSessionResult{Deleted: true}, nil
+}
+
 func (s *MemoryStore) GetWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

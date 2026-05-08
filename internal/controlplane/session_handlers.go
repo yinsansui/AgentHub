@@ -483,6 +483,26 @@ func (s *Server) handleSessionState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, sanitizeStateForUser(userID, state))
 }
 
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	userID := currentUserID(r.Context())
+	sessionID := r.PathValue("sessionId")
+	result, err := s.store.DeleteSession(r.Context(), userID, sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if result.ActiveRun != nil {
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, map[string]any{"error": "active_run_exists", "activeRun": sanitizeRunPointerForUser(userID, result.ActiveRun)})
+		return
+	}
+	if !result.Deleted {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"deleted": true})
+}
+
 func (s *Server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) {
 	userID := currentUserID(r.Context())
 	sessionID := r.PathValue("sessionId")

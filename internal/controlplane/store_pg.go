@@ -408,6 +408,66 @@ LIMIT $2 OFFSET $3
 	return sessions, rows.Err()
 }
 
+func (s *Store) deleteSession(ctx context.Context, ownerUserID, sessionID string) (DeleteSessionResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DeleteSessionResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var taskID string
+	var activeRunID sql.NullString
+	err = tx.QueryRow(ctx, `
+SELECT s.task_id, s.active_run_id
+FROM sessions s
+JOIN workspaces w ON w.id = s.workspace_id
+WHERE w.owner_user_id = $1 AND s.id = $2
+FOR UPDATE OF s
+`, ownerUserID, sessionID).Scan(&taskID, &activeRunID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.Commit(ctx); err != nil {
+			return DeleteSessionResult{}, err
+		}
+		return DeleteSessionResult{Deleted: false}, nil
+	}
+	if err != nil {
+		return DeleteSessionResult{}, err
+	}
+
+	if activeRunID.Valid && activeRunID.String != "" {
+		active, ok, err := queryRun(ctx, tx, sessionID, activeRunID.String)
+		if err != nil {
+			return DeleteSessionResult{}, err
+		}
+		if ok && !isTerminalRunStatus(active.Status) {
+			return DeleteSessionResult{Deleted: false, ActiveRun: &active}, nil
+		}
+	}
+
+	deleteStatements := []struct {
+		sql  string
+		args []any
+	}{
+		{sql: `DELETE FROM message_blocks WHERE session_id = $1`, args: []any{sessionID}},
+		{sql: `DELETE FROM messages WHERE session_id = $1`, args: []any{sessionID}},
+		{sql: `DELETE FROM session_events WHERE session_id = $1`, args: []any{sessionID}},
+		{sql: `DELETE FROM session_runs WHERE session_id = $1`, args: []any{sessionID}},
+		{sql: `DELETE FROM sessions WHERE id = $1`, args: []any{sessionID}},
+	}
+	for _, statement := range deleteStatements {
+		if _, err := tx.Exec(ctx, statement.sql, statement.args...); err != nil {
+			return DeleteSessionResult{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tasks WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM sessions WHERE task_id = $1)`, taskID); err != nil {
+		return DeleteSessionResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return DeleteSessionResult{}, err
+	}
+	return DeleteSessionResult{Deleted: true}, nil
+}
+
 func (s *Store) getWorkspaceLLMConnection(ctx context.Context, workspaceID string) (LLMConnection, bool, error) {
 	var connection LLMConnection
 	err := s.pool.QueryRow(ctx, `

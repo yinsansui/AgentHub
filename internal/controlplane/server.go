@@ -83,6 +83,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /sessions/{sessionId}/stream", s.handleSessionStream)
 	mux.HandleFunc("GET /sessions/{sessionId}/messages", s.handleSessionMessages)
 	mux.HandleFunc("GET /sessions/{sessionId}/state", s.handleSessionState)
+	mux.HandleFunc("DELETE /sessions/{sessionId}", s.handleDeleteSession)
 	mux.HandleFunc("POST /sessions/{sessionId}/interrupt", s.handleSessionInterrupt)
 	return s.withAuth(mux)
 }
