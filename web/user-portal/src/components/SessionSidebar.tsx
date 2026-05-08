@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, LogOut, Settings, SquarePen, Plus } from "lucide-react";
+import { ChevronDown, LogOut, Settings, SquarePen, Plus, Trash2 } from "lucide-react";
 import { createWorkspace } from "../api";
 import type { CurrentUser, SessionProjection, WorkspaceProjection } from "../types";
 
@@ -16,6 +16,7 @@ type Props = {
   sessionListError: string | null;
   activeSessionId: string | undefined;
   onLoadSession: (id: string) => void;
+  onDeleteSession: (id: string) => Promise<void>;
   onLoadMore: () => void;
   onNewSession: () => void;
   onOpenSettings: () => void;
@@ -27,13 +28,15 @@ export function SessionSidebar({
   activeWorkspaceId,
   workspaces, workspacesLoading, workspacesLoaded, onLoadWorkspaces, onSelectWorkspace,
   sessionList, sessionListHasMore, sessionListLoading, sessionListError,
-  activeSessionId, onLoadSession, onLoadMore, onNewSession, onOpenSettings, user, onLogout
+  activeSessionId, onLoadSession, onDeleteSession, onLoadMore, onNewSession, onOpenSettings, user, onLogout
 }: Props) {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [formName, setFormName] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [formLoading, setFormLoading] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [pendingDeleteSession, setPendingDeleteSession] = useState<SessionProjection | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
   const activeWorkspaceName = activeWorkspace?.name || "选择 Workspace";
@@ -78,6 +81,23 @@ export function SessionSidebar({
     }
   }
 
+  function handleDeleteSession(event: React.MouseEvent, session: SessionProjection) {
+    event.stopPropagation();
+    setPendingDeleteSession(session);
+  }
+
+  async function confirmDelete() {
+    if (!pendingDeleteSession) return;
+    const id = pendingDeleteSession.sessionId;
+    setDeletingSessionId(id);
+    try {
+      await onDeleteSession(id);
+    } finally {
+      setDeletingSessionId(null);
+      setPendingDeleteSession(null);
+    }
+  }
+
   return (
     <>
       <div className="flex items-center justify-between gap-2 h-[52px] px-4 border-b border-black/[0.06]">
@@ -107,15 +127,33 @@ export function SessionSidebar({
         }}
       >
         {sessionList.map((s) => (
-          <button
+          <div
             key={s.sessionId}
-            type="button"
-            className={`w-full min-h-[52px] flex flex-col items-start gap-0.5 px-2.5 py-2 rounded-[10px] bg-transparent shadow-none text-left text-[13px] hover:bg-black/5 ${activeSessionId === s.sessionId ? "bg-black/[0.07]" : ""}`}
+            className={`group w-full min-h-[52px] flex items-center gap-1.5 px-2.5 py-2 rounded-[10px] text-[13px] hover:bg-black/5 ${activeSessionId === s.sessionId ? "bg-black/[0.07]" : ""}`}
             onClick={() => onLoadSession(s.sessionId)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onLoadSession(s.sessionId);
+              }
+            }}
           >
-            <span className="w-full overflow-hidden text-ellipsis whitespace-nowrap font-medium">{s.title || s.sessionId}</span>
-            <small className="text-apple-fg-50 text-[11px] overflow-hidden text-ellipsis whitespace-nowrap w-full">{s.modelId || ""}</small>
-          </button>
+            <div className="min-w-0 flex-1 text-left">
+              <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap font-medium">{s.title || s.sessionId}</span>
+              <small className="block text-apple-fg-50 text-[11px] overflow-hidden text-ellipsis whitespace-nowrap w-full">{s.modelId || ""}</small>
+            </div>
+            <button
+              type="button"
+              className="w-7 h-7 min-h-7 p-0 rounded-md bg-transparent shadow-none text-apple-fg-40 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-apple-fg-5 hover:text-apple-destructive-text disabled:opacity-40"
+              disabled={deletingSessionId === s.sessionId}
+              aria-label="删除 Session"
+              onClick={(event) => void handleDeleteSession(event, s)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
         ))}
         {sessionListLoading && sessionList.length === 0 && (
           <div className="py-8 text-center text-apple-fg-50 text-[13px]">加载中…</div>
@@ -192,6 +230,38 @@ export function SessionSidebar({
           )}
         </div>
       </div>
+
+      {pendingDeleteSession && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
+          onClick={() => { if (!deletingSessionId) setPendingDeleteSession(null); }}
+        >
+          <div className="bg-apple-panel rounded-2xl shadow-apple-card p-6 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-[15px] font-medium mb-1">删除 Session</h3>
+            <p className="text-[13px] text-apple-fg-50 mb-5">
+              确定删除「{pendingDeleteSession.title || pendingDeleteSession.sessionId}」？此操作不可撤销。
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="min-h-8 px-3 py-0 text-[13px] bg-apple-fg-5 border border-apple-fg-10 shadow-none text-apple-fg hover:bg-apple-fg-10 rounded-lg disabled:opacity-40"
+                disabled={!!deletingSessionId}
+                onClick={() => setPendingDeleteSession(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="min-h-8 px-3 py-0 text-[13px] bg-apple-destructive-text text-white shadow-none hover:opacity-90 rounded-lg disabled:opacity-50"
+                disabled={!!deletingSessionId}
+                onClick={() => void confirmDelete()}
+              >
+                {deletingSessionId ? "删除中…" : "删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setCreateModalOpen(false)}>
