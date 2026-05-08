@@ -7,8 +7,7 @@ type SettingsTab = "llm" | "skills" | "mcp" | "workspace";
 
 const API_PROTOCOL_OPTIONS = [
   { value: "anthropic-messages", label: "Anthropic Messages" },
-  { value: "openai-chat", label: "OpenAI Chat" },
-  { value: "openai-completion", label: "OpenAI Completion" },
+  { value: "openai-completions", label: "OpenAI Chat Completions" },
   { value: "azure-chat", label: "Azure Chat" },
   { value: "google-generative", label: "Google Generative" },
   { value: "bedrock-converse", label: "Bedrock Converse" },
