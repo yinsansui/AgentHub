@@ -7,6 +7,7 @@ AGENT_POD_PORT="${AGENTHUB_AGENT_POD_PORT:-3001}"
 USER_PORTAL_PORT="${AGENTHUB_USER_PORTAL_PORT:-5174}"
 POSTGRES_PORT="${AGENTHUB_POSTGRES_PORT:-5432}"
 POSTGRES_CONTAINER="${AGENTHUB_POSTGRES_CONTAINER:-agenthub-dev-postgres}"
+POSTGRES_VOLUME="${AGENTHUB_POSTGRES_VOLUME:-agenthub-dev-postgres-data}"
 DATABASE_URL="${AGENTHUB_DATABASE_URL:-}"
 SKIP_BUILD="${AGENTHUB_SKIP_BUILD:-0}"
 KEEP_POSTGRES="${AGENTHUB_KEEP_POSTGRES:-0}"
@@ -46,8 +47,8 @@ cleanup() {
     fi
   done
   if [[ "${POSTGRES_STARTED}" == "1" && "${KEEP_POSTGRES}" != "1" ]]; then
-    docker rm -f "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
-    log "PostgreSQL container removed"
+    docker stop "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
+    log "PostgreSQL container stopped"
   fi
   if [[ ${status} -eq 0 ]]; then
     log "all services stopped"
@@ -121,9 +122,10 @@ if [[ -z "${DATABASE_URL}" ]]; then
     docker start "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
     POSTGRES_STARTED=1
   else
-    log "starting PostgreSQL container ${POSTGRES_CONTAINER} (port ${POSTGRES_PORT})..."
+    log "starting PostgreSQL container ${POSTGRES_CONTAINER} (port ${POSTGRES_PORT}, volume ${POSTGRES_VOLUME})..."
     docker run -d --name "${POSTGRES_CONTAINER}" \
       -p "127.0.0.1:${POSTGRES_PORT}:5432" \
+      -v "${POSTGRES_VOLUME}:/var/lib/postgresql/data" \
       -e POSTGRES_USER=agenthub \
       -e POSTGRES_PASSWORD=agenthub \
       -e POSTGRES_DB=agenthub \

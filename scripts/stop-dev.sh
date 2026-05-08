@@ -124,8 +124,8 @@ stop_postgres() {
     return 0
   fi
   if docker ps -a --format '{{.Names}}' | grep -qx "${POSTGRES_CONTAINER}"; then
-    log "removing PostgreSQL container ${POSTGRES_CONTAINER}"
-    docker rm -f "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
+    log "stopping PostgreSQL container ${POSTGRES_CONTAINER}"
+    docker stop "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
   else
     log "PostgreSQL container ${POSTGRES_CONTAINER} not found"
   fi
