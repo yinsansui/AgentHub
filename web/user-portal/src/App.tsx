@@ -197,8 +197,8 @@ export default function App() {
           onManualModel={workspace.handleManualModel}
           onSetDefaultModel={workspace.handleSetDefaultModel}
           skills={workspace.skills}
-          skillForm={workspace.skillForm}
-          setSkillForm={workspace.setSkillForm}
+          skillEditor={workspace.skillEditor}
+          setSkillEditor={workspace.setSkillEditor}
           skillEditorOpen={workspace.skillEditorOpen}
           onNewSkill={workspace.handleNewSkill}
           onLoadSkill={workspace.handleLoadSkill}

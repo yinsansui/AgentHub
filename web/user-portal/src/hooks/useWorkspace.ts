@@ -35,12 +35,28 @@ const initialLLMForm = {
   apiKey: ""
 };
 
-const initialSkillForm = {
+export type SkillFileEntry = { path: string; content: string };
+
+export type SkillEditorState = {
+  slug: string;
+  name: string;
+  description: string;
+  files: SkillFileEntry[];
+  selectedPath: string;
+  savedFiles: SkillFileEntry[];
+  localFolders: string[];
+};
+
+const INITIAL_SKILL_FILE: SkillFileEntry = { path: "SKILL.md", content: "# Skill\n\n" };
+
+const initialSkillEditor: SkillEditorState = {
   slug: "",
   name: "",
   description: "",
-  path: "SKILL.md",
-  content: "# Skill\n\n"
+  files: [INITIAL_SKILL_FILE],
+  selectedPath: "SKILL.md",
+  savedFiles: [INITIAL_SKILL_FILE],
+  localFolders: [],
 };
 
 const initialMCPForm = {
@@ -66,7 +82,7 @@ export function useWorkspace(workspaceId: string) {
   const [manualModelId, setManualModelId] = useState("");
 
   const [skills, setSkills] = useState<SkillDefinitionWithFiles[]>([]);
-  const [skillForm, setSkillForm] = useState(initialSkillForm);
+  const [skillEditor, setSkillEditor] = useState<SkillEditorState>(initialSkillEditor);
   const [skillEditorOpen, setSkillEditorOpen] = useState(false);
 
   const [mcpServers, setMCPServers] = useState<MCPServerDefinitionWithEnv[]>([]);
@@ -194,21 +210,27 @@ export function useWorkspace(workspaceId: string) {
   }
 
   function handleNewSkill() {
-    setSkillForm(initialSkillForm);
+    setSkillEditor(initialSkillEditor);
     setSkillEditorOpen(true);
   }
 
   async function handleLoadSkill(slug: string) {
     try {
       const skill = await getSkill(workspaceId, slug);
-      setSkillEditorOpen(true);
-      setSkillForm({
+      const files: SkillFileEntry[] = skill.files.length > 0
+        ? skill.files.map((f) => ({ path: f.path, content: f.content }))
+        : [INITIAL_SKILL_FILE];
+      const selectedPath = files.some((f) => f.path === "SKILL.md") ? "SKILL.md" : files[0].path;
+      setSkillEditor({
         slug: skill.definition.slug,
         name: skill.definition.name ?? "",
         description: skill.definition.description ?? "",
-        path: skill.files[0]?.path ?? "SKILL.md",
-        content: skill.files[0]?.content ?? ""
+        files,
+        selectedPath,
+        savedFiles: files.map((f) => ({ ...f })),
+        localFolders: [],
       });
+      setSkillEditorOpen(true);
     } catch (error) {
       reportError(error, "读取 Skill 失败");
     }
@@ -217,13 +239,13 @@ export function useWorkspace(workspaceId: string) {
   async function handleSaveSkill(event: FormEvent) {
     event.preventDefault();
     try {
-      const saved = await saveSkill(workspaceId, skillForm.slug.trim(), {
-        name: skillForm.name,
-        description: skillForm.description,
-        files: [{ path: skillForm.path, content: skillForm.content }]
+      const saved = await saveSkill(workspaceId, skillEditor.slug.trim(), {
+        name: skillEditor.name,
+        description: skillEditor.description,
+        files: skillEditor.files,
       });
       setSkills((c) => replaceBy(c, saved, (s) => s.definition.slug));
-      setSkillEditorOpen(true);
+      setSkillEditor((prev) => ({ ...prev, savedFiles: prev.files.map((f) => ({ ...f })) }));
       setNotice({ tone: "success", text: "Skill 已保存，对新 session 生效" });
     } catch (error) {
       reportError(error, "保存 Skill 失败");
@@ -234,8 +256,8 @@ export function useWorkspace(workspaceId: string) {
     try {
       await deleteSkill(workspaceId, slug);
       setSkills((c) => c.filter((s) => s.definition.slug !== slug));
-      if (skillForm.slug === slug) {
-        setSkillForm(initialSkillForm);
+      if (skillEditor.slug === slug) {
+        setSkillEditor(initialSkillEditor);
         setSkillEditorOpen(false);
       }
     } catch (error) {
@@ -313,7 +335,7 @@ export function useWorkspace(workspaceId: string) {
   return {
     loadState, healthOk, pod, logs, showLogs, notice, setNotice,
     llmConnection, apiKeySet, llmForm, setLLMForm, models, manualModelId, setManualModelId,
-    skills, skillForm, setSkillForm, skillEditorOpen,
+    skills, skillEditor, setSkillEditor, skillEditorOpen,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen,
     refreshWorkspace,
     handleLoadLogs,
