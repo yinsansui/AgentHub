@@ -1,7 +1,8 @@
-import { Bot, ChevronDown, FileText, Plus, Puzzle, RefreshCw, Save, Server, Trash2, LayoutGrid } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { Bot, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, FolderPlus, FilePlus, Plus, Puzzle, RefreshCw, Save, Search, Server, Trash2, LayoutGrid } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles, WorkspaceProjection } from "../types";
+import type { SkillEditorState } from "../hooks/useWorkspace";
 
 type SettingsTab = "llm" | "skills" | "mcp" | "workspace";
 
@@ -31,8 +32,8 @@ type Props = {
   onManualModel: (e: FormEvent) => void;
   onSetDefaultModel: (modelId: string) => void;
   skills: SkillDefinitionWithFiles[];
-  skillForm: { slug: string; name: string; description: string; path: string; content: string };
-  setSkillForm: (v: { slug: string; name: string; description: string; path: string; content: string }) => void;
+  skillEditor: SkillEditorState;
+  setSkillEditor: (v: SkillEditorState) => void;
   skillEditorOpen: boolean;
   onNewSkill: () => void;
   onLoadSkill: (slug: string) => void;
@@ -152,6 +153,678 @@ function SectionCard(props: { title: string; description?: string; actions?: Rea
       </div>
       {props.children}
     </section>
+  );
+}
+
+function slugify(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function isDirtyEditor(editor: SkillEditorState): boolean {
+  if (editor.files.length !== editor.savedFiles.length) return true;
+  return editor.files.some((f, i) => {
+    const saved = editor.savedFiles[i];
+    return !saved || f.path !== saved.path || f.content !== saved.content;
+  });
+}
+
+function cleanSkillPath(value: string): string {
+  return value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/+/g, "/");
+}
+
+function parentDirectory(path: string): string {
+  if (!path.includes("/")) return "";
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
+function pathHasUnsafeSegment(path: string): boolean {
+  return path.split("/").some((part) => !part || part === "." || part === "..");
+}
+
+function CreateSkillDialog(props: {
+  open: boolean;
+  creating: boolean;
+  onClose: () => void;
+  onCreate: (payload: { slug: string; name: string; description: string }) => void;
+}) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [description, setDescription] = useState("");
+  const suggestedSlug = useMemo(() => slugify(name), [name]);
+  const effectiveSlug = slug.trim() || suggestedSlug;
+
+  useEffect(() => {
+    if (!props.open) { setName(""); setSlug(""); setDescription(""); return; }
+    const t = setTimeout(() => nameRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [props.open]);
+
+  if (!props.open) return null;
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !effectiveSlug) return;
+    props.onCreate({ slug: effectiveSlug, name: name.trim(), description: description.trim() || "新建 Skill" });
+  }
+
+  return (
+    <div className="settings-modal-overlay" onClick={props.onClose}>
+      <div className="settings-modal-panel" onClick={(e) => e.stopPropagation()}>
+        <h3>新建 Skill</h3>
+        <p className="settings-modal-description">创建一个新的工作区 Skill。名称和描述会写入 SKILL.md。</p>
+        <form onSubmit={handleSubmit} className="skill-create-form">
+          <label className="settings-field">
+            <span>显示名称</span>
+            <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Code Review Assistant" />
+          </label>
+          <label className="settings-field">
+            <span>Slug {suggestedSlug && !slug.trim() ? <em className="skill-slug-hint">自动建议：{suggestedSlug}</em> : null}</span>
+            <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder={suggestedSlug || "例如：code-review-assistant"} />
+          </label>
+          <label className="settings-field">
+            <span>描述</span>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="简要说明这个 Skill 擅长处理什么任务" rows={3} />
+          </label>
+          <div className="settings-modal-actions">
+            <button type="button" className="settings-modal-cancel" onClick={props.onClose} disabled={props.creating}>取消</button>
+            <button type="submit" className="settings-modal-confirm" disabled={props.creating || !name.trim() || !effectiveSlug}>
+              {props.creating ? "创建中…" : "创建 Skill"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AddItemDialog(props: {
+  open: boolean;
+  mode: "file" | "folder";
+  prefixPath: string;
+  onClose: () => void;
+  onAdd: (path: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState("");
+
+  useLayoutEffect(() => {
+    if (!props.open) { setName(""); return; }
+    setName(props.prefixPath ? `${props.prefixPath}/` : "");
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [props.open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!props.open) return null;
+
+  const placeholder = props.mode === "file"
+    ? (props.prefixPath ? `${props.prefixPath}/filename.md` : "例如：docs/guide.md")
+    : (props.prefixPath ? `${props.prefixPath}/subfolder` : "例如：docs");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    props.onAdd(trimmed);
+    setName("");
+  }
+
+  return (
+    <div className="settings-modal-overlay" onClick={props.onClose}>
+      <div className="settings-modal-panel" onClick={(e) => e.stopPropagation()}>
+        <h3>{props.mode === "file" ? "新增文件" : "新增文件夹"}</h3>
+        <form onSubmit={handleSubmit}>
+          <input ref={inputRef} value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholder} />
+          <div className="settings-modal-actions">
+            <button type="button" className="settings-modal-cancel" onClick={props.onClose}>取消</button>
+            <button type="submit" className="settings-modal-confirm" disabled={!name.trim()}>
+              {props.mode === "file" ? "添加文件" : "添加文件夹"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+type TreeNode =
+  | { kind: "file"; path: string; name: string }
+  | { kind: "dir"; path: string; name: string; children: TreeNode[] };
+
+function buildTree(filePaths: string[], localFolders: string[]): TreeNode[] {
+  const root: TreeNode[] = [];
+  for (const folder of localFolders) {
+    const parts = folder.split("/");
+    let current = root;
+    for (let i = 0; i < parts.length; i++) {
+      const dirPath = parts.slice(0, i + 1).join("/");
+      let dir = current.find((n): n is Extract<TreeNode, { kind: "dir" }> => n.kind === "dir" && n.name === parts[i]);
+      if (!dir) {
+        dir = { kind: "dir", path: dirPath, name: parts[i], children: [] };
+        current.push(dir);
+      }
+      current = dir.children;
+    }
+  }
+
+  for (const filePath of filePaths) {
+    const parts = filePath.split("/");
+    if (parts.length === 1) {
+      root.push({ kind: "file", path: filePath, name: parts[0] });
+    } else {
+      let current = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const dirPath = parts.slice(0, i + 1).join("/");
+        let dir = current.find((n): n is Extract<TreeNode, { kind: "dir" }> => n.kind === "dir" && n.name === parts[i]);
+        if (!dir) {
+          dir = { kind: "dir", path: dirPath, name: parts[i], children: [] };
+          current.push(dir);
+        }
+        current = dir.children;
+      }
+      current.push({ kind: "file", path: filePath, name: parts[parts.length - 1] });
+    }
+  }
+
+  return root;
+}
+
+function sortTree(nodes: TreeNode[]): TreeNode[] {
+  return [...nodes].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  }).map((n) => n.kind === "dir" ? { ...n, children: sortTree(n.children) } : n);
+}
+
+type RenameState = { path: string; value: string } | null;
+
+function FileTreeNode(props: {
+  node: TreeNode;
+  depth: number;
+  selectedPath: string;
+  selectedDir: string;
+  expandedDirs: Set<string>;
+  renaming: RenameState;
+  savedFiles: { path: string; content: string }[];
+  files: { path: string; content: string }[];
+  onSelect: (path: string) => void;
+  onSelectDir: (path: string) => void;
+  onToggleDir: (path: string) => void;
+  onStartRename: (path: string, currentName: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onRenameChange: (value: string) => void;
+  onDelete: (node: TreeNode) => void;
+}) {
+  const { node, depth, selectedPath, selectedDir, expandedDirs, renaming, onSelect, onSelectDir, onToggleDir, onStartRename, onCommitRename, onCancelRename, onRenameChange, onDelete } = props;
+  const indent = depth * 14;
+  const isRenaming = renaming?.path === node.path;
+
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") { e.preventDefault(); onCommitRename(); }
+    if (e.key === "Escape") { e.preventDefault(); onCancelRename(); }
+  }
+
+  if (node.kind === "dir") {
+    const expanded = expandedDirs.has(node.path);
+    const isDirSelected = selectedDir === node.path;
+    return (
+      <>
+        <div
+          className={`skill-tree-row skill-tree-dir ${isDirSelected ? "active" : ""}`}
+          style={{ paddingLeft: 10 + indent }}
+          onClick={() => { onSelectDir(node.path); onToggleDir(node.path); }}
+          onDoubleClick={(e) => { e.stopPropagation(); if (!isRenaming) onStartRename(node.path, node.name); }}
+        >
+          <button type="button" className="skill-tree-toggle" onClick={(e) => { e.stopPropagation(); onToggleDir(node.path); }}>
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+          {expanded ? <FolderOpen size={13} className="skill-tree-icon-dir" /> : <Folder size={13} className="skill-tree-icon-dir" />}
+          {isRenaming ? (
+            <input
+              autoFocus
+              className="skill-tree-rename-input"
+              value={renaming.value}
+              onChange={(e) => onRenameChange(e.target.value)}
+              onBlur={onCommitRename}
+              onKeyDown={handleKeyDown}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="skill-tree-name">{node.name}</span>
+          )}
+          <button
+            type="button"
+            className="skill-tree-delete-btn"
+            aria-label={`删除文件夹 ${node.name}`}
+            onClick={(e) => { e.stopPropagation(); onDelete(node); }}
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+        {expanded && node.children.map((child) => (
+          <FileTreeNode key={child.path} {...props} node={child} depth={depth + 1} />
+        ))}
+      </>
+    );
+  }
+
+  const isSelected = node.path === selectedPath;
+  const isMain = node.path === "SKILL.md";
+  const fileDirty = (() => {
+    const saved = props.savedFiles.find((sf) => sf.path === node.path);
+    const current = props.files.find((f) => f.path === node.path);
+    return !saved || saved.content !== current?.content;
+  })();
+
+  return (
+    <div
+      className={`skill-tree-row skill-tree-file ${isSelected ? "active" : ""}`}
+      style={{ paddingLeft: 10 + indent }}
+      onClick={() => { onSelect(node.path); onSelectDir(""); }}
+      onDoubleClick={() => { if (!isMain) onStartRename(node.path, node.name); }}
+    >
+      <FileText size={13} className="skill-tree-icon-file" />
+      {isRenaming ? (
+        <input
+          autoFocus
+          className="skill-tree-rename-input"
+          value={renaming.value}
+          onChange={(e) => onRenameChange(e.target.value)}
+          onBlur={onCommitRename}
+          onKeyDown={handleKeyDown}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="skill-tree-name">{node.name}</span>
+      )}
+      {isMain && <span className="skill-file-badge">主</span>}
+      {fileDirty && <span className="skill-file-dirty" aria-label="未保存" />}
+      {!isMain && (
+        <button
+          type="button"
+          className="skill-tree-delete-btn"
+          aria-label={`删除文件 ${node.name}`}
+          onClick={(e) => { e.stopPropagation(); onDelete(node); }}
+        >
+          <Trash2 size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+type SkillsTabProps = {
+  skills: SkillDefinitionWithFiles[];
+  skillEditor: SkillEditorState;
+  setSkillEditor: (v: SkillEditorState) => void;
+  skillEditorOpen: boolean;
+  onNewSkill: () => void;
+  onLoadSkill: (slug: string) => void;
+  onSaveSkill: (e: FormEvent) => void;
+  onDeleteSkill: (slug: string) => void;
+  onCloseSkillEditor: () => void;
+};
+
+function SkillsTab(props: SkillsTabProps) {
+  const { skills, skillEditor, setSkillEditor, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor } = props;
+  const [query, setQuery] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [addItemMode, setAddItemMode] = useState<"file" | "folder" | null>(null);
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [selectedDir, setSelectedDir] = useState<string>("");
+  const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<TreeNode | null>(null);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredSkills = useMemo(() => {
+    if (!normalizedQuery) return skills;
+    return skills.filter((s) =>
+      [s.definition.slug, s.definition.name, s.definition.description]
+        .some((v) => String(v ?? "").toLowerCase().includes(normalizedQuery))
+    );
+  }, [skills, normalizedQuery]);
+
+  const dirty = isDirtyEditor(skillEditor);
+  const selectedFile = skillEditor.files.find((f) => f.path === skillEditor.selectedPath);
+
+  const tree = useMemo(
+    () => sortTree(buildTree(skillEditor.files.map((f) => f.path), skillEditor.localFolders)),
+    [skillEditor.files, skillEditor.localFolders]
+  );
+
+  function directoryExists(path: string): boolean {
+    return skillEditor.localFolders.includes(path) || skillEditor.files.some((f) => f.path.startsWith(path + "/"));
+  }
+
+  function handleSelectFile(path: string) {
+    if (path === skillEditor.selectedPath) return;
+    setSkillEditor({ ...skillEditor, selectedPath: path });
+    setSelectedDir("");
+  }
+
+  function handleToggleDir(path: string) {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }
+
+  function handleAddItem(rawPath: string) {
+    const path = cleanSkillPath(rawPath);
+    if (!path || pathHasUnsafeSegment(path)) return;
+
+    if (addItemMode === "folder") {
+      if (skillEditor.files.some((f) => f.path === path)) { setAddItemMode(null); return; }
+      if (skillEditor.localFolders.includes(path)) { setAddItemMode(null); return; }
+      const alreadyExists = skillEditor.files.some((f) => f.path.startsWith(path + "/") || f.path === path);
+      if (!alreadyExists) {
+        setSkillEditor({ ...skillEditor, localFolders: [...skillEditor.localFolders, path] });
+      }
+      const parts = path.split("/");
+      setExpandedDirs((prev) => {
+        const next = new Set(prev);
+        for (let i = 1; i <= parts.length; i++) next.add(parts.slice(0, i).join("/"));
+        return next;
+      });
+      setSelectedDir(path);
+    } else {
+      if (path.endsWith("/")) return;
+      if (skillEditor.files.some((f) => f.path === path)) { setAddItemMode(null); return; }
+      const newFiles = [...skillEditor.files, { path, content: "" }];
+      const parts = path.split("/");
+      const newLocalFolders = skillEditor.localFolders.filter((folder) => {
+        return !parts.slice(0, -1).some((_, i) => parts.slice(0, i + 1).join("/") === folder && !newFiles.some((f) => f.path.startsWith(folder + "/")));
+      });
+      setSkillEditor({ ...skillEditor, files: newFiles, selectedPath: path, localFolders: newLocalFolders });
+      if (parts.length > 1) {
+        setExpandedDirs((prev) => {
+          const next = new Set(prev);
+          for (let i = 1; i < parts.length; i++) next.add(parts.slice(0, i).join("/"));
+          return next;
+        });
+      }
+    }
+    setAddItemMode(null);
+  }
+
+  function handleStartRename(path: string, currentName: string) {
+    setRenaming({ path, value: currentName });
+  }
+
+  function handleCommitRename() {
+    if (!renaming) return;
+    if (renaming.path === "SKILL.md") { setRenaming(null); return; }
+    const newName = cleanSkillPath(renaming.value);
+    if (!newName || newName.includes("/") || pathHasUnsafeSegment(newName)) { setRenaming(null); return; }
+
+    const isDir = skillEditor.files.every((f) => f.path !== renaming.path);
+    if (isDir) {
+      const oldPrefix = renaming.path + "/";
+      const parentPath = parentDirectory(renaming.path);
+      const newDirPath = parentPath ? `${parentPath}/${newName}` : newName;
+      if (newDirPath === renaming.path) { setRenaming(null); return; }
+      const newPrefix = newDirPath + "/";
+      const newFiles = skillEditor.files.map((f) =>
+        f.path.startsWith(oldPrefix) ? { ...f, path: newPrefix + f.path.slice(oldPrefix.length) } : f
+      );
+      if (newFiles.length !== new Set(newFiles.map((f) => f.path)).size) { setRenaming(null); return; }
+      if (skillEditor.files.some((f) => f.path === newDirPath)) { setRenaming(null); return; }
+      const newLocalFolders = skillEditor.localFolders
+        .filter((folder) => folder !== renaming.path && !folder.startsWith(oldPrefix))
+        .concat(
+          skillEditor.localFolders
+            .filter((folder) => folder === renaming.path || folder.startsWith(oldPrefix))
+            .map((folder) => folder === renaming.path ? newDirPath : newPrefix + folder.slice(oldPrefix.length))
+        );
+      const newSelectedPath = skillEditor.selectedPath.startsWith(oldPrefix)
+        ? newPrefix + skillEditor.selectedPath.slice(oldPrefix.length)
+        : skillEditor.selectedPath;
+      setExpandedDirs((prev) => {
+        const next = new Set<string>();
+        for (const p of prev) {
+          if (p === renaming.path) next.add(newDirPath);
+          else if (p.startsWith(oldPrefix)) next.add(newPrefix + p.slice(oldPrefix.length));
+          else next.add(p);
+        }
+        return next;
+      });
+      setSkillEditor({ ...skillEditor, files: newFiles, localFolders: newLocalFolders, selectedPath: newSelectedPath });
+    } else {
+      const oldPath = renaming.path;
+      const parentPath = parentDirectory(oldPath);
+      const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+      if (newPath === oldPath) { setRenaming(null); return; }
+      if (skillEditor.files.some((f) => f.path === newPath)) { setRenaming(null); return; }
+      const newFiles = skillEditor.files.map((f) => f.path === oldPath ? { ...f, path: newPath } : f);
+      const newSelectedPath = skillEditor.selectedPath === oldPath ? newPath : skillEditor.selectedPath;
+      setSkillEditor({ ...skillEditor, files: newFiles, selectedPath: newSelectedPath });
+    }
+    setRenaming(null);
+  }
+
+  function handleDeleteNode(node: TreeNode) {
+    if (node.kind === "dir") {
+      const hasFiles = skillEditor.files.some((f) => f.path.startsWith(node.path + "/"));
+      if (hasFiles) { setDeleteConfirm(node); return; }
+      setSkillEditor({ ...skillEditor, localFolders: skillEditor.localFolders.filter((f) => f !== node.path && !f.startsWith(node.path + "/")) });
+      return;
+    }
+    if (node.path === "SKILL.md") return;
+    setDeleteConfirm(node);
+  }
+
+  function handleConfirmDelete() {
+    if (!deleteConfirm) return;
+    if (deleteConfirm.kind === "file") {
+      const newFiles = skillEditor.files.filter((f) => f.path !== deleteConfirm.path);
+      const nextPath = newFiles.some((f) => f.path === "SKILL.md") ? "SKILL.md" : newFiles[0]?.path ?? "";
+      setSkillEditor({ ...skillEditor, files: newFiles, selectedPath: nextPath });
+    } else {
+      const prefix = deleteConfirm.path + "/";
+      const newFiles = skillEditor.files.filter((f) => !f.path.startsWith(prefix));
+      const newLocalFolders = skillEditor.localFolders.filter((f) => f !== deleteConfirm.path && !f.startsWith(prefix));
+      const nextPath = newFiles.some((f) => f.path === "SKILL.md") ? "SKILL.md" : newFiles[0]?.path ?? "";
+      setSkillEditor({ ...skillEditor, files: newFiles, localFolders: newLocalFolders, selectedPath: nextPath });
+    }
+    setDeleteConfirm(null);
+  }
+
+  function handleContentChange(content: string) {
+    setSkillEditor({
+      ...skillEditor,
+      files: skillEditor.files.map((f) => f.path === skillEditor.selectedPath ? { ...f, content } : f),
+    });
+  }
+
+  function handleCloseEditor() {
+    if (dirty && !window.confirm("有未保存的修改，确认放弃并返回列表吗？")) return;
+    if (dirty) {
+      setSkillEditor({
+        ...skillEditor,
+        files: skillEditor.savedFiles.length > 0 ? skillEditor.savedFiles.map((f) => ({ ...f })) : skillEditor.files,
+        selectedPath: skillEditor.savedFiles[0]?.path ?? skillEditor.selectedPath,
+      });
+    }
+    onCloseSkillEditor();
+  }
+
+  async function handleCreate(payload: { slug: string; name: string; description: string }) {
+    setCreating(true);
+    try {
+      onNewSkill();
+      setSkillEditor({
+        slug: payload.slug,
+        name: payload.name,
+        description: payload.description,
+        files: [{ path: "SKILL.md", content: `# ${payload.name}\n\n${payload.description}\n` }],
+        selectedPath: "SKILL.md",
+        savedFiles: [],
+        localFolders: [],
+      });
+      setCreateOpen(false);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (!skillEditorOpen) {
+    return (
+      <PageShell>
+        <SectionCard
+          title="Skill 列表"
+          description="注入到新 session 的 Skill 包。"
+          actions={
+            <button type="button" className="settings-primary-button" onClick={() => setCreateOpen(true)}>
+              <Plus size={14} />新建 Skill
+            </button>
+          }
+        >
+          <div className="skill-search-bar">
+            <Search size={14} className="skill-search-icon" />
+            <input
+              className="skill-search-input"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索 Skill…"
+            />
+          </div>
+          {normalizedQuery && (
+            <p className="skill-search-hint">命中 {filteredSkills.length} / {skills.length}</p>
+          )}
+          <div className="settings-list">
+            {filteredSkills.map((skill) => (
+              <div className="settings-list-row" key={skill.definition.slug}>
+                <button type="button" className="settings-list-button" onClick={() => void onLoadSkill(skill.definition.slug)}>
+                  <FileText size={15} />
+                  <span>{skill.definition.name || skill.definition.slug}</span>
+                  <small>{skill.definition.slug}</small>
+                </button>
+                <button type="button" className="settings-delete-button" aria-label={`删除 ${skill.definition.slug}`} onClick={() => void onDeleteSkill(skill.definition.slug)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            {skills.length === 0 && <p className="empty-copy">暂无 Skill。</p>}
+            {skills.length > 0 && filteredSkills.length === 0 && <p className="empty-copy">没有匹配的 Skill。</p>}
+          </div>
+        </SectionCard>
+        <CreateSkillDialog open={createOpen} creating={creating} onClose={() => setCreateOpen(false)} onCreate={(p) => void handleCreate(p)} />
+      </PageShell>
+    );
+  }
+
+  return (
+    <PageShell>
+      <SectionCard
+        title={skillEditor.slug ? `Skill: ${skillEditor.slug}` : "新建 Skill"}
+        actions={
+          <button type="button" className="settings-back-button" onClick={handleCloseEditor}>← 返回列表</button>
+        }
+      >
+        <form className="settings-form skill-meta-form" onSubmit={onSaveSkill}>
+          <Field label="Slug">
+            <input value={skillEditor.slug} onChange={(e) => setSkillEditor({ ...skillEditor, slug: e.target.value })} placeholder="my-skill" />
+          </Field>
+          <Field label="名称">
+            <input value={skillEditor.name} onChange={(e) => setSkillEditor({ ...skillEditor, name: e.target.value })} placeholder="My Skill" />
+          </Field>
+          <Field label="描述" span>
+            <input value={skillEditor.description} onChange={(e) => setSkillEditor({ ...skillEditor, description: e.target.value })} placeholder="简要描述" />
+          </Field>
+
+          <div className="skill-editor-area settings-field-span">
+            <div className="skill-file-list">
+              <div className="skill-file-list-header">
+                <span>文件</span>
+                <div className="skill-file-list-actions">
+                  <button type="button" className="skill-file-add-btn" onClick={() => setAddItemMode("file")} aria-label="新增文件" title="新增文件">
+                    <FilePlus size={13} />
+                  </button>
+                  <button type="button" className="skill-file-add-btn" onClick={() => setAddItemMode("folder")} aria-label="新增文件夹" title="新增文件夹">
+                    <FolderPlus size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className="skill-tree">
+                {tree.map((node) => (
+                  <FileTreeNode
+                    key={node.path}
+                    node={node}
+                    depth={0}
+                    selectedPath={skillEditor.selectedPath}
+                    selectedDir={selectedDir}
+                    expandedDirs={expandedDirs}
+                    renaming={renaming}
+                    savedFiles={skillEditor.savedFiles}
+                    files={skillEditor.files}
+                    onSelect={handleSelectFile}
+                    onSelectDir={setSelectedDir}
+                    onToggleDir={handleToggleDir}
+                    onStartRename={handleStartRename}
+                    onCommitRename={handleCommitRename}
+                    onCancelRename={() => setRenaming(null)}
+                    onRenameChange={(value) => setRenaming((r) => r ? { ...r, value } : r)}
+                    onDelete={handleDeleteNode}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="skill-editor-pane">
+              <div className="skill-editor-pane-header">
+                <span className="skill-editor-path">{skillEditor.selectedPath}</span>
+                <div className="skill-editor-pane-actions">
+                  {dirty && <span className="skill-dirty-badge">未保存</span>}
+                </div>
+              </div>
+              <textarea
+                className="settings-code-textarea skill-editor-textarea"
+                value={selectedFile?.content ?? ""}
+                onChange={(e) => handleContentChange(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="settings-form-footer">
+            <span>保存后的 Skill 仅对新 session 生效。</span>
+            <button type="submit" className="settings-primary-button" disabled={!skillEditor.slug.trim()}>
+              <Save size={14} />保存 Skill
+            </button>
+          </div>
+        </form>
+      </SectionCard>
+
+      <AddItemDialog
+        open={addItemMode !== null}
+        mode={addItemMode ?? "file"}
+        prefixPath={(() => {
+          if (selectedDir && directoryExists(selectedDir)) return selectedDir;
+          const parent = parentDirectory(skillEditor.selectedPath);
+          return parent;
+        })()}
+        onClose={() => setAddItemMode(null)}
+        onAdd={handleAddItem}
+      />
+
+      {deleteConfirm && (
+        <div className="settings-modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="settings-modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h3>{deleteConfirm.kind === "dir" ? "删除文件夹" : "删除文件"}</h3>
+            <p className="settings-modal-description">
+              确认删除 <code>{deleteConfirm.path}</code>
+              {deleteConfirm.kind === "dir" ? " 及其所有文件" : ""}？
+            </p>
+            <div className="settings-modal-actions">
+              <button type="button" className="settings-modal-cancel" onClick={() => setDeleteConfirm(null)}>取消</button>
+              <button type="button" className="settings-modal-confirm" onClick={handleConfirmDelete}>删除</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </PageShell>
   );
 }
 
@@ -300,7 +973,7 @@ export function SettingsPanel(props: Props) {
     settingsTab, setSettingsTab, onBack,
     llmConnection, apiKeySet, llmForm, setLLMForm, onSaveLLM,
     models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel, onSetDefaultModel,
-    skills, skillForm, setSkillForm, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor,
+    skills, skillEditor, setSkillEditor, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen, onNewMCP, onLoadMCP, onSaveMCP, onDeleteMCP, onCloseMCPEditor,
     activeWorkspace, onUpdateWorkspace, onDeleteWorkspace
   } = props;
@@ -385,45 +1058,17 @@ export function SettingsPanel(props: Props) {
             </PageShell>
           )}
           {settingsTab === "skills" && (
-            <PageShell>
-              {!skillEditorOpen ? (
-                <SectionCard
-                  title="Skill 列表"
-                  description="注入到新 session 的 Skill 包。"
-                  actions={<button type="button" className="settings-primary-button" onClick={onNewSkill}><Plus size={14} />新建 Skill</button>}
-                >
-                  <div className="settings-list">
-                    {skills.map((skill) => (
-                      <div className="settings-list-row" key={skill.definition.slug}>
-                        <button type="button" className="settings-list-button" onClick={() => void onLoadSkill(skill.definition.slug)}>
-                          <FileText size={15} />
-                          <span>{skill.definition.slug}</span>
-                          <small>{skill.definition.name || "Skill"}</small>
-                        </button>
-                        <button type="button" className="settings-delete-button" aria-label={`删除 ${skill.definition.slug}`} onClick={() => void onDeleteSkill(skill.definition.slug)}>
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    ))}
-                    {skills.length === 0 && <p className="empty-copy">暂无 Skill。</p>}
-                  </div>
-                </SectionCard>
-              ) : (
-                <SectionCard title="Skill 编辑器" description="编辑元数据与包入口文件。" actions={<button type="button" className="settings-back-button" onClick={onCloseSkillEditor}>← 返回列表</button>}>
-                  <form className="settings-form" onSubmit={onSaveSkill}>
-                    <Field label="Slug"><input value={skillForm.slug} onChange={(e) => setSkillForm({ ...skillForm, slug: e.target.value })} /></Field>
-                    <Field label="名称"><input value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} /></Field>
-                    <Field label="描述" span><input value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} /></Field>
-                    <Field label="文件路径" span><input value={skillForm.path} onChange={(e) => setSkillForm({ ...skillForm, path: e.target.value })} /></Field>
-                    <Field label="内容" span><textarea className="settings-code-textarea" value={skillForm.content} onChange={(e) => setSkillForm({ ...skillForm, content: e.target.value })} /></Field>
-                    <div className="settings-form-footer">
-                      <span>保存后的 Skill 仅对新 session 生效。</span>
-                      <button type="submit" className="settings-primary-button"><Save size={14} />保存 Skill</button>
-                    </div>
-                  </form>
-                </SectionCard>
-              )}
-            </PageShell>
+            <SkillsTab
+              skills={skills}
+              skillEditor={skillEditor}
+              setSkillEditor={setSkillEditor}
+              skillEditorOpen={skillEditorOpen}
+              onNewSkill={onNewSkill}
+              onLoadSkill={onLoadSkill}
+              onSaveSkill={onSaveSkill}
+              onDeleteSkill={onDeleteSkill}
+              onCloseSkillEditor={onCloseSkillEditor}
+            />
           )}
           {settingsTab === "mcp" && (
             <PageShell>
