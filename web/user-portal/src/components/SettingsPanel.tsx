@@ -1,10 +1,12 @@
-import { Bot, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, FolderPlus, FilePlus, Plus, Puzzle, RefreshCw, Save, Search, Server, Trash2, LayoutGrid } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, FolderPlus, FilePlus, Plus, Puzzle, RefreshCw, Save, Search, Server, Trash2, LayoutGrid, Package } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
-import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles, WorkspaceProjection } from "../types";
+import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, SkillDefinitionWithFiles, WorkspacePlugin, WorkspaceProjection } from "../types";
 import type { SkillEditorState } from "../hooks/useWorkspace";
+import { PageShell, SectionCard } from "./settings/layout";
+import { PluginsTab } from "./settings/plugins/PluginsTab";
 
-type SettingsTab = "llm" | "skills" | "mcp" | "workspace";
+type SettingsTab = "llm" | "skills" | "mcp" | "workspace" | "plugins";
 
 const API_PROTOCOL_OPTIONS = [
   { value: "anthropic-messages", label: "Anthropic Messages" },
@@ -52,6 +54,8 @@ type Props = {
   activeWorkspace: WorkspaceProjection | undefined;
   onUpdateWorkspace: (id: string, name: string) => Promise<void>;
   onDeleteWorkspace: (id: string) => Promise<{ deleted: boolean; replacementWorkspace?: WorkspaceProjection }>;
+  plugins: WorkspacePlugin[];
+  onSavePlugin: (pluginId: string, config: Record<string, unknown>) => void;
 };
 
 type SettingsTabMeta = {
@@ -64,6 +68,7 @@ const settingsTabs: SettingsTabMeta[] = [
   { tab: "llm", label: "LLM", icon: <Bot size={16} /> },
   { tab: "skills", label: "Skill", icon: <Puzzle size={16} /> },
   { tab: "mcp", label: "MCP", icon: <Server size={16} /> },
+  { tab: "plugins", label: "Plugins", icon: <Package size={16} /> },
   { tab: "workspace", label: "Workspace", icon: <LayoutGrid size={16} /> }
 ];
 
@@ -129,30 +134,6 @@ function CustomSelect(props: {
         </ul>
       )}
     </div>
-  );
-}
-
-function PageShell(props: { actions?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="settings-page">
-      {props.actions && <div className="settings-page-actions">{props.actions}</div>}
-      <div className="settings-page-body">{props.children}</div>
-    </section>
-  );
-}
-
-function SectionCard(props: { title: string; description?: string; actions?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="settings-card">
-      <div className="settings-card-header">
-        <div>
-          <h2>{props.title}</h2>
-          {props.description && <p>{props.description}</p>}
-        </div>
-        {props.actions && <div className="settings-card-actions">{props.actions}</div>}
-      </div>
-      {props.children}
-    </section>
   );
 }
 
@@ -828,8 +809,7 @@ function SkillsTab(props: SkillsTabProps) {
   );
 }
 
-function WorkspaceSettingsCard({
-  activeWorkspace,
+function WorkspaceSettingsCard({  activeWorkspace,
   onUpdateWorkspace,
   onDeleteWorkspace,
   onBack,
@@ -975,7 +955,8 @@ export function SettingsPanel(props: Props) {
     models, manualModelId, setManualModelId, onRefreshModels, onUpsertModel, onManualModel, onSetDefaultModel,
     skills, skillEditor, setSkillEditor, skillEditorOpen, onNewSkill, onLoadSkill, onSaveSkill, onDeleteSkill, onCloseSkillEditor,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen, onNewMCP, onLoadMCP, onSaveMCP, onDeleteMCP, onCloseMCPEditor,
-    activeWorkspace, onUpdateWorkspace, onDeleteWorkspace
+    activeWorkspace, onUpdateWorkspace, onDeleteWorkspace,
+    plugins, onSavePlugin
   } = props;
 
   return (
@@ -1110,6 +1091,12 @@ export function SettingsPanel(props: Props) {
                 </SectionCard>
               )}
             </PageShell>
+          )}
+          {settingsTab === "plugins" && (
+            <PluginsTab
+              plugins={plugins}
+              onSavePlugin={onSavePlugin}
+            />
           )}
           {settingsTab === "workspace" && (
             <WorkspaceSettingsCard
