@@ -10,7 +10,8 @@ import type {
   SkillDefinitionWithFiles,
   StoredEvent,
   TaskProjection,
-  WorkspaceProjection
+  WorkspaceProjection,
+  WorkspacePlugin
 } from "./types";
 
 export class ApiError extends Error {
@@ -170,6 +171,19 @@ export async function saveMCPServer(
 
 export async function deleteMCPServer(workspaceId: string, name: string): Promise<void> {
   await apiRequest(`/workspaces/${encodeURIComponent(workspaceId)}/mcp-servers/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export async function listWorkspacePlugins(workspaceId: string): Promise<WorkspacePlugin[]> {
+  const payload = await apiRequest<{ plugins: WorkspacePlugin[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/plugins`);
+  return payload.plugins ?? [];
+}
+
+export async function installWorkspacePlugin(workspaceId: string, pluginId: string, config: object): Promise<WorkspacePlugin> {
+  const payload = await apiRequest<{ plugin: WorkspacePlugin }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/plugins/${encodeURIComponent(pluginId)}/install`,
+    { method: "PUT", body: JSON.stringify({ config }) }
+  );
+  return payload.plugin;
 }
 
 export async function listWorkspaces(limit: number, offset: number): Promise<{ workspaces: WorkspaceProjection[]; limit: number; offset: number }> {

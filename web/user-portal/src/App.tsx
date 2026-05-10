@@ -13,7 +13,7 @@ import type { Notice } from "./hooks/useWorkspace";
 import type { CurrentUser, WorkspaceProjection } from "./types";
 
 type NavigationPanel = "sessions" | "settings";
-type SettingsTab = "llm" | "skills" | "mcp" | "workspace";
+type SettingsTab = "llm" | "skills" | "mcp" | "workspace" | "plugins";
 
 function resolveInitialWorkspaceId(workspaces: WorkspaceProjection[]): string {
   const params = new URLSearchParams(window.location.search);
@@ -217,6 +217,8 @@ export default function App() {
           activeWorkspace={workspaceList.workspaces.find((w) => w.id === activeWorkspaceId)}
           onUpdateWorkspace={handleUpdateCurrentWorkspace}
           onDeleteWorkspace={handleDeleteCurrentWorkspace}
+          plugins={workspace.plugins}
+          onSavePlugin={workspace.handleSavePlugin}
         />
       </>
     );

@@ -206,3 +206,26 @@ export type CurrentUser = {
   username: string;
   role: string;
 };
+
+export type PluginConfigField = {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+};
+
+export type RepoEntry = {
+  repoName: string;
+  repoUrl: string;
+};
+
+export type WorkspacePlugin = {
+  id: string;
+  name: string;
+  description: string;
+  icon?: string;
+  configFields: PluginConfigField[];
+  installed: boolean;
+  config?: Record<string, unknown>;
+  updatedAt?: string;
+};

@@ -11,6 +11,8 @@ import {
   listMCPServers,
   listModels,
   listSkills,
+  listWorkspacePlugins,
+  installWorkspacePlugin,
   refreshModels,
   saveLLMConnection,
   saveMCPServer,
@@ -18,7 +20,7 @@ import {
   upsertModel
 } from "../api";
 import { errorMessage, replaceBy, lines, envMap } from "../lib/utils";
-import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, PodInfo, SkillDefinitionWithFiles } from "../types";
+import type { LLMConnection, LLMModel, MCPServerDefinitionWithEnv, PodInfo, SkillDefinitionWithFiles, WorkspacePlugin } from "../types";
 import type { FormEvent } from "react";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -89,6 +91,8 @@ export function useWorkspace(workspaceId: string) {
   const [mcpForm, setMCPForm] = useState(initialMCPForm);
   const [mcpEditorOpen, setMCPEditorOpen] = useState(false);
 
+  const [plugins, setPlugins] = useState<WorkspacePlugin[]>([]);
+
   const reportError = useCallback((error: unknown, fallback: string) => {
     setNotice({ tone: "error", text: errorMessage(error, fallback) });
   }, []);
@@ -98,12 +102,13 @@ export function useWorkspace(workspaceId: string) {
     setLoadState("loading");
     setNotice(null);
     try {
-      const [health, llm, modelList, skillList, mcpList] = await Promise.all([
+      const [health, llm, modelList, skillList, mcpList, pluginList] = await Promise.all([
         getHealth(),
         getLLMConnection(workspaceId),
         listModels(workspaceId),
         listSkills(workspaceId),
-        listMCPServers(workspaceId)
+        listMCPServers(workspaceId),
+        listWorkspacePlugins(workspaceId)
       ]);
       setHealthOk(health.ok);
       setLLMConnection(llm.connection);
@@ -117,6 +122,7 @@ export function useWorkspace(workspaceId: string) {
       setModels(modelList);
       setSkills(skillList);
       setMCPServers(mcpList);
+      setPlugins(pluginList);
       try { setPod(await getPod(workspaceId)); } catch { setPod(null); }
       setLoadState("ready");
     } catch (error) {
@@ -324,6 +330,16 @@ export function useWorkspace(workspaceId: string) {
     setMCPEditorOpen(false);
   }
 
+  async function handleSavePlugin(pluginId: string, config: Record<string, unknown>) {
+    try {
+      const saved = await installWorkspacePlugin(workspaceId, pluginId, config);
+      setPlugins((c) => replaceBy(c, saved, (p) => p.id));
+      setNotice({ tone: "success", text: "插件已保存，对新 session 生效" });
+    } catch (error) {
+      reportError(error, "保存插件配置失败");
+    }
+  }
+
   async function handleSetDefaultModel(modelId: string) {
     try {
       await saveDefaultModel(modelId);
@@ -337,10 +353,12 @@ export function useWorkspace(workspaceId: string) {
     llmConnection, apiKeySet, llmForm, setLLMForm, models, manualModelId, setManualModelId,
     skills, skillEditor, setSkillEditor, skillEditorOpen,
     mcpServers, mcpForm, setMCPForm, mcpEditorOpen,
+    plugins,
     refreshWorkspace,
     handleLoadLogs,
     handleSaveLLM, handleRefreshModels, handleUpsertModel, handleManualModel, handleSetDefaultModel,
     handleNewSkill, handleLoadSkill, handleSaveSkill, handleDeleteSkill, handleCloseSkillEditor,
-    handleNewMCP, handleLoadMCP, handleSaveMCP, handleDeleteMCP, handleCloseMCPEditor
+    handleNewMCP, handleLoadMCP, handleSaveMCP, handleDeleteMCP, handleCloseMCPEditor,
+    handleSavePlugin
   };
 }
