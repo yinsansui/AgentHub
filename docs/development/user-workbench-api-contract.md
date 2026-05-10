@@ -26,7 +26,7 @@ workspace 准备
 7. session 创建时会自动创建默认 task；当前没有独立创建 task 的接口。
 8. session 创建后 `modelId` 锁定；只要已经有一次 turn，不支持切换 model。
 9. session skill / MCP 在创建 session 时物理化到 session cwd；修改 workspace skill / MCP 只影响新 session。
-10. repo plugin 暂不在本阶段范围内。
+10. repo plugin 已作为 MVP 内置插件实现。workspace 插件列表与安装通过 `/workspaces/{workspaceId}/plugins` 系列 API 管理；多仓库配置存入 plugin config（`AGENTHUB_REPOSITORIES`）；plugin 负责 clone 仓库（clone-only tool）并创建 task `repos/` 目录；plugin source Skill/MCP 由 plugin 生成注入。配置仅对新 session 生效。
 11. 当前 DB 规则是不使用外键；前端不要从外键关系做推断。workspace 表字段是 `id`、`name`、`owner_user_id`。
 
 ### 1.1 Auth 接口
@@ -586,7 +586,7 @@ Workbench 初始化首选：
       "blocks": [
         { "type": "thinking", "text": "..." },
         { "type": "text", "text": "最终回答" },
-        { "type": "tool_call", "name": "repo__search", "input": "{...}" }
+        { "type": "tool_call", "name": "repo__clone", "input": "{...}" }
       ]
     }
   ]

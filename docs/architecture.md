@@ -301,7 +301,7 @@ user-portal / admin-console
 5. `sessions/<sessionId>/docs` 软链接到 task 层级共享目录
 6. `AGENTS.md` 和 `CLAUDE.md` 为当前 task 的任务级指令文件，并软链接到每个 session cwd
 
-`repos/` 不由平台核心创建；仓库目录、clone 状态和 session 内 repo 可见性后续由 repo plugin 负责。
+`repos/` 由 repo plugin 在需要时创建；plugin 负责 clone 仓库、维护 clone 状态，以及控制 session 内 repo 可见性。
 
 这意味着即使多个 task 运行在同一个 workspace 中，它们的任务目录也必须彼此隔离。
 
@@ -309,7 +309,7 @@ user-portal / admin-console
 
 ## 8. MCP 与 Skill 加载机制
 
-当前阶段优先完成平台通用的 MCP / skill 加载机制，暂缓 repo plugin 等具体业务插件。第一版 skill / MCP 都不做实时 reload，定义修改只影响之后创建的新 session。
+当前阶段优先完成平台通用的 MCP / skill 加载机制；repo plugin 已作为 MVP 内置插件实现，提供 workspace 插件列表与安装 API、多仓库配置（`AGENTHUB_REPOSITORIES`）、clone-only MCP tool，以及由 plugin 负责创建 `repos/` 目录和生成 plugin source Skill/MCP。第一版 skill / MCP 都不做实时 reload，定义修改只影响之后创建的新 session。
 
 ### 8.1 长生命周期：Task Runtime Environment
 
@@ -639,7 +639,7 @@ Skill 和 MCP 是两种不同扩展面：
 以下内容本轮先不展开，但后续需要继续细化：
 
 1. run 重试与更完整观测模型
-2. repo plugin：基于通用 MCP / skill 机制之后再实现，能力包括 repo catalog、UI 可选仓库列表、clone 状态记录、`repo.clone` MCP tool、repo knowledge skill、以及 clone 到 task `repos/` 目录
+2. repo plugin：已作为 MVP 内置插件实现，能力包括 workspace 插件列表与安装 API、多仓库配置（`AGENTHUB_REPOSITORIES`）、clone-only MCP tool、生成 plugin source Skill/MCP，以及由 plugin 负责创建 task `repos/` 目录
 3. task 目录结构与 workspace 复用策略
 4. workspace 的复用、回收和资源限制策略
 5. 多 runtime 协作模型
