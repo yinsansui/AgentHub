@@ -266,21 +266,22 @@ WHERE m.connection_id = c.id AND c.workspace_id = $1
 		{sql: `
 DELETE FROM skill_files f
 USING skill_definitions d
-WHERE f.skill_id = d.id AND d.source = $1 AND d.scope_type = 'workspace' AND d.scope_id = $2
-`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+WHERE f.skill_id = d.id AND d.source IN ($1, $2) AND d.scope_type = 'workspace' AND d.scope_id = $3
+`, args: []any{protocol.SkillSourceWorkspace, protocol.SkillSourcePlugin, ownedWorkspaceID}},
 		{sql: `
 DELETE FROM mcp_server_env e
 USING mcp_server_definitions d
-WHERE e.server_id = d.id AND d.source = $1 AND d.scope_type = 'workspace' AND d.scope_id = $2
-`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+WHERE e.server_id = d.id AND d.source IN ($1, $2) AND d.scope_type = 'workspace' AND d.scope_id = $3
+`, args: []any{protocol.SkillSourceWorkspace, protocol.SkillSourcePlugin, ownedWorkspaceID}},
 		{sql: `DELETE FROM messages WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 		{sql: `DELETE FROM session_events WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 		{sql: `DELETE FROM session_runs WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 		{sql: `DELETE FROM sessions WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 		{sql: `DELETE FROM tasks WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 		{sql: `DELETE FROM llm_connections WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
-		{sql: `DELETE FROM skill_definitions WHERE source = $1 AND scope_type = 'workspace' AND scope_id = $2`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
-		{sql: `DELETE FROM mcp_server_definitions WHERE source = $1 AND scope_type = 'workspace' AND scope_id = $2`, args: []any{protocol.SkillSourceWorkspace, ownedWorkspaceID}},
+		{sql: `DELETE FROM skill_definitions WHERE source IN ($1, $2) AND scope_type = 'workspace' AND scope_id = $3`, args: []any{protocol.SkillSourceWorkspace, protocol.SkillSourcePlugin, ownedWorkspaceID}},
+		{sql: `DELETE FROM mcp_server_definitions WHERE source IN ($1, $2) AND scope_type = 'workspace' AND scope_id = $3`, args: []any{protocol.SkillSourceWorkspace, protocol.SkillSourcePlugin, ownedWorkspaceID}},
+		{sql: `DELETE FROM workspace_plugin_installs WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 		{sql: `DELETE FROM workspace_tokens WHERE workspace_id = $1`, args: []any{ownedWorkspaceID}},
 	}
 	for _, statement := range deleteStatements {
@@ -785,6 +786,10 @@ func (s *Store) getWorkspaceSkill(ctx context.Context, workspaceID, slug string)
 }
 
 func (s *Store) upsertWorkspaceSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	return s.upsertScopedSkill(ctx, protocol.SkillSourceWorkspace, "workspace", workspaceID, skill)
+}
+
+func (s *Store) upsertScopedSkill(ctx context.Context, source, scopeType, scopeID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return SkillDefinitionWithFiles{}, err
@@ -803,7 +808,7 @@ DO UPDATE SET
   version = skill_definitions.version + 1,
   updated_at = now()
 RETURNING id, slug, source, scope_type, scope_id, name, description, version, content_hash, created_at, updated_at
-`, def.ID, def.Slug, protocol.SkillSourceWorkspace, "workspace", workspaceID, def.Name, def.Description, def.ContentHash).Scan(
+`, def.ID, def.Slug, source, scopeType, scopeID, def.Name, def.Description, def.ContentHash).Scan(
 		&def.ID, &def.Slug, &def.Source, &def.ScopeType, &def.ScopeID, &def.Name, &def.Description, &def.Version, &def.ContentHash, &def.CreatedAt, &def.UpdatedAt,
 	)
 	if err != nil {
@@ -950,6 +955,10 @@ func (s *Store) getWorkspaceMCPServer(ctx context.Context, workspaceID, name str
 }
 
 func (s *Store) upsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	return s.upsertScopedMCPServer(ctx, protocol.SkillSourceWorkspace, "workspace", workspaceID, server)
+}
+
+func (s *Store) upsertScopedMCPServer(ctx context.Context, source, scopeType, scopeID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return MCPServerDefinitionWithEnv{}, err
@@ -973,7 +982,7 @@ DO UPDATE SET
   version = mcp_server_definitions.version + 1,
   updated_at = now()
 RETURNING id, name, source, scope_type, scope_id, command, args, transport, version, content_hash, created_at, updated_at
-`, def.ID, def.Name, protocol.SkillSourceWorkspace, "workspace", workspaceID, def.Command, argsPayload, def.Transport, def.ContentHash).Scan(
+`, def.ID, def.Name, source, scopeType, scopeID, def.Command, argsPayload, def.Transport, def.ContentHash).Scan(
 		&def.ID, &def.Name, &def.Source, &def.ScopeType, &def.ScopeID, &def.Command, &argsPayload, &def.Transport, &def.Version, &def.ContentHash, &def.CreatedAt, &def.UpdatedAt,
 	)
 	if err != nil {
@@ -1114,6 +1123,69 @@ func scanMCPServerDefinitionsWithEnv(rows pgx.Rows) ([]MCPServerDefinitionWithEn
 		}
 	}
 	return definitions, rows.Err()
+}
+
+func (s *Store) listWorkspacePluginInstalls(ctx context.Context, workspaceID string) ([]WorkspacePluginInstall, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT workspace_id, plugin_id, config, created_at, updated_at
+FROM workspace_plugin_installs
+WHERE workspace_id = $1
+ORDER BY plugin_id ASC
+`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	installs := []WorkspacePluginInstall{}
+	for rows.Next() {
+		var install WorkspacePluginInstall
+		var config []byte
+		if err := rows.Scan(&install.WorkspaceID, &install.PluginID, &config, &install.CreatedAt, &install.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if len(config) > 0 {
+			if err := json.Unmarshal(config, &install.Config); err != nil {
+				return nil, err
+			}
+		}
+		if install.Config == nil {
+			install.Config = map[string]any{}
+		}
+		installs = append(installs, install)
+	}
+	return installs, rows.Err()
+}
+
+func (s *Store) upsertWorkspacePluginInstall(ctx context.Context, workspaceID string, install WorkspacePluginInstall) (WorkspacePluginInstall, error) {
+	config := clonePluginConfig(install.Config)
+	if config == nil {
+		config = map[string]any{}
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return WorkspacePluginInstall{}, err
+	}
+	var saved WorkspacePluginInstall
+	var savedConfig []byte
+	err = s.pool.QueryRow(ctx, `
+INSERT INTO workspace_plugin_installs (workspace_id, plugin_id, config, updated_at)
+VALUES ($1, $2, $3::jsonb, now())
+ON CONFLICT (workspace_id, plugin_id)
+DO UPDATE SET config = EXCLUDED.config, updated_at = now()
+RETURNING workspace_id, plugin_id, config, created_at, updated_at
+`, workspaceID, install.PluginID, payload).Scan(&saved.WorkspaceID, &saved.PluginID, &savedConfig, &saved.CreatedAt, &saved.UpdatedAt)
+	if err != nil {
+		return WorkspacePluginInstall{}, err
+	}
+	if len(savedConfig) > 0 {
+		if err := json.Unmarshal(savedConfig, &saved.Config); err != nil {
+			return WorkspacePluginInstall{}, err
+		}
+	}
+	if saved.Config == nil {
+		saved.Config = map[string]any{}
+	}
+	return saved, nil
 }
 
 func (s *Store) startRun(ctx context.Context, turn protocol.TurnRequest) (SessionRun, error) {

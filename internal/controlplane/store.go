@@ -58,6 +58,10 @@ type EventStore interface {
 	GetWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (MCPServerDefinitionWithEnv, bool, error)
 	UpsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error)
 	DeleteWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (bool, error)
+	ListWorkspacePluginInstalls(ctx context.Context, workspaceID string) ([]WorkspacePluginInstall, error)
+	UpsertWorkspacePluginInstall(ctx context.Context, workspaceID string, install WorkspacePluginInstall) (WorkspacePluginInstall, error)
+	UpsertWorkspacePluginSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error)
+	UpsertWorkspacePluginMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error)
 	Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error)
 	ListEventsBySession(ctx context.Context, sessionID string, afterID int64, limit int) ([]StoredEvent, error)
 	ListMessagesBySession(ctx context.Context, sessionID string) ([]MessageProjection, error)
@@ -229,6 +233,14 @@ type MCPServerEnv struct {
 type MCPServerDefinitionWithEnv struct {
 	Definition MCPServerDefinition `json:"definition"`
 	Env        []MCPServerEnv      `json:"env"`
+}
+
+type WorkspacePluginInstall struct {
+	WorkspaceID string         `json:"workspaceId"`
+	PluginID    string         `json:"pluginId"`
+	Config      map[string]any `json:"config,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
 }
 
 type ActiveRunConflict struct {
@@ -454,6 +466,15 @@ CREATE TABLE IF NOT EXISTS mcp_server_env (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_server_definitions_scope_name ON mcp_server_definitions (source, scope_type, scope_id, name);
 CREATE INDEX IF NOT EXISTS idx_mcp_server_definitions_name_source ON mcp_server_definitions (name, source, updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_server_env_server_name ON mcp_server_env (server_id, name);
+CREATE TABLE IF NOT EXISTS workspace_plugin_installs (
+  workspace_id TEXT NOT NULL,
+  plugin_id TEXT NOT NULL,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, plugin_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_plugin_installs_workspace ON workspace_plugin_installs (workspace_id, plugin_id);
 `)
 	return err
 }
@@ -579,6 +600,22 @@ func (s *Store) UpsertWorkspaceMCPServer(ctx context.Context, workspaceID string
 
 func (s *Store) DeleteWorkspaceMCPServer(ctx context.Context, workspaceID, name string) (bool, error) {
 	return s.deleteWorkspaceMCPServer(ctx, workspaceID, name)
+}
+
+func (s *Store) ListWorkspacePluginInstalls(ctx context.Context, workspaceID string) ([]WorkspacePluginInstall, error) {
+	return s.listWorkspacePluginInstalls(ctx, workspaceID)
+}
+
+func (s *Store) UpsertWorkspacePluginInstall(ctx context.Context, workspaceID string, install WorkspacePluginInstall) (WorkspacePluginInstall, error) {
+	return s.upsertWorkspacePluginInstall(ctx, workspaceID, install)
+}
+
+func (s *Store) UpsertWorkspacePluginSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	return s.upsertScopedSkill(ctx, protocol.SkillSourcePlugin, "workspace", workspaceID, skill)
+}
+
+func (s *Store) UpsertWorkspacePluginMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	return s.upsertScopedMCPServer(ctx, protocol.SkillSourcePlugin, "workspace", workspaceID, server)
 }
 
 func (s *Store) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {

@@ -25,6 +25,7 @@ type MemoryStore struct {
 	runs           map[string]SessionRun
 	skills         map[string]SkillDefinitionWithFiles
 	mcpServers     map[string]MCPServerDefinitionWithEnv
+	pluginInstalls map[string]WorkspacePluginInstall
 	llmConnections map[string]LLMConnection
 	llmModels      map[string]LLMConnectionModel
 }
@@ -42,6 +43,7 @@ func NewMemoryStore() *MemoryStore {
 		runs:           map[string]SessionRun{},
 		skills:         map[string]SkillDefinitionWithFiles{},
 		mcpServers:     map[string]MCPServerDefinitionWithEnv{},
+		pluginInstalls: map[string]WorkspacePluginInstall{},
 		llmConnections: map[string]LLMConnection{},
 		llmModels:      map[string]LLMConnectionModel{},
 	}
@@ -149,13 +151,18 @@ func (s *MemoryStore) DeleteWorkspace(ctx context.Context, ownerUserID, workspac
 		delete(s.llmConnections, workspaceID)
 	}
 	for key, skill := range s.skills {
-		if skill.Definition.Source == protocol.SkillSourceWorkspace && skill.Definition.ScopeType == "workspace" && skill.Definition.ScopeID == workspaceID {
+		if (skill.Definition.Source == protocol.SkillSourceWorkspace || skill.Definition.Source == protocol.SkillSourcePlugin) && skill.Definition.ScopeType == "workspace" && skill.Definition.ScopeID == workspaceID {
 			delete(s.skills, key)
 		}
 	}
 	for key, server := range s.mcpServers {
-		if server.Definition.Source == protocol.SkillSourceWorkspace && server.Definition.ScopeType == "workspace" && server.Definition.ScopeID == workspaceID {
+		if (server.Definition.Source == protocol.SkillSourceWorkspace || server.Definition.Source == protocol.SkillSourcePlugin) && server.Definition.ScopeType == "workspace" && server.Definition.ScopeID == workspaceID {
 			delete(s.mcpServers, key)
+		}
+	}
+	for key, install := range s.pluginInstalls {
+		if install.WorkspaceID == workspaceID {
+			delete(s.pluginInstalls, key)
 		}
 	}
 	delete(s.workspaceToken, workspaceID)
@@ -397,6 +404,14 @@ func (s *MemoryStore) GetWorkspaceSkill(ctx context.Context, workspaceID, slug s
 }
 
 func (s *MemoryStore) UpsertWorkspaceSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	return s.upsertScopedSkill(protocol.SkillSourceWorkspace, "workspace", workspaceID, skill)
+}
+
+func (s *MemoryStore) UpsertWorkspacePluginSkill(ctx context.Context, workspaceID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
+	return s.upsertScopedSkill(protocol.SkillSourcePlugin, "workspace", workspaceID, skill)
+}
+
+func (s *MemoryStore) upsertScopedSkill(source, scopeType, scopeID string, skill SkillDefinitionWithFiles) (SkillDefinitionWithFiles, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
@@ -408,9 +423,9 @@ func (s *MemoryStore) UpsertWorkspaceSkill(ctx context.Context, workspaceID stri
 		skill.Definition.Version = 1
 		skill.Definition.CreatedAt = now
 	}
-	skill.Definition.Source = protocol.SkillSourceWorkspace
-	skill.Definition.ScopeType = "workspace"
-	skill.Definition.ScopeID = workspaceID
+	skill.Definition.Source = source
+	skill.Definition.ScopeType = scopeType
+	skill.Definition.ScopeID = scopeID
 	skill.Definition.UpdatedAt = now
 	for idx := range skill.Files {
 		skill.Files[idx].SkillID = skill.Definition.ID
@@ -457,6 +472,14 @@ func (s *MemoryStore) GetWorkspaceMCPServer(ctx context.Context, workspaceID, na
 }
 
 func (s *MemoryStore) UpsertWorkspaceMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	return s.upsertScopedMCPServer(protocol.SkillSourceWorkspace, "workspace", workspaceID, server)
+}
+
+func (s *MemoryStore) UpsertWorkspacePluginMCPServer(ctx context.Context, workspaceID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
+	return s.upsertScopedMCPServer(protocol.SkillSourcePlugin, "workspace", workspaceID, server)
+}
+
+func (s *MemoryStore) upsertScopedMCPServer(source, scopeType, scopeID string, server MCPServerDefinitionWithEnv) (MCPServerDefinitionWithEnv, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
@@ -468,9 +491,9 @@ func (s *MemoryStore) UpsertWorkspaceMCPServer(ctx context.Context, workspaceID 
 		server.Definition.Version = 1
 		server.Definition.CreatedAt = now
 	}
-	server.Definition.Source = protocol.SkillSourceWorkspace
-	server.Definition.ScopeType = "workspace"
-	server.Definition.ScopeID = workspaceID
+	server.Definition.Source = source
+	server.Definition.ScopeType = scopeType
+	server.Definition.ScopeID = scopeID
 	server.Definition.UpdatedAt = now
 	for idx := range server.Env {
 		server.Env[idx].ServerID = server.Definition.ID
@@ -491,6 +514,39 @@ func (s *MemoryStore) DeleteWorkspaceMCPServer(ctx context.Context, workspaceID,
 		}
 	}
 	return false, nil
+}
+
+func (s *MemoryStore) ListWorkspacePluginInstalls(ctx context.Context, workspaceID string) ([]WorkspacePluginInstall, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []WorkspacePluginInstall{}
+	for _, install := range s.pluginInstalls {
+		if install.WorkspaceID == workspaceID {
+			out = append(out, cloneWorkspacePluginInstall(install))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PluginID < out[j].PluginID })
+	return out, nil
+}
+
+func (s *MemoryStore) UpsertWorkspacePluginInstall(ctx context.Context, workspaceID string, install WorkspacePluginInstall) (WorkspacePluginInstall, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	key := workspaceID + "\x00" + install.PluginID
+	if existing, ok := s.pluginInstalls[key]; ok {
+		install.CreatedAt = existing.CreatedAt
+	} else {
+		install.CreatedAt = now
+	}
+	install.WorkspaceID = workspaceID
+	install.Config = clonePluginConfig(install.Config)
+	if install.Config == nil {
+		install.Config = map[string]any{}
+	}
+	install.UpdatedAt = now
+	s.pluginInstalls[key] = cloneWorkspacePluginInstall(install)
+	return cloneWorkspacePluginInstall(install), nil
 }
 
 func (s *MemoryStore) Append(ctx context.Context, event protocol.UniversalEvent) (StoredEvent, error) {
@@ -739,6 +795,14 @@ func cloneMCPServerWithEnv(server MCPServerDefinitionWithEnv) MCPServerDefinitio
 	def := server.Definition
 	def.Args = append([]string(nil), def.Args...)
 	return MCPServerDefinitionWithEnv{Definition: def, Env: env}
+}
+
+func cloneWorkspacePluginInstall(install WorkspacePluginInstall) WorkspacePluginInstall {
+	install.Config = clonePluginConfig(install.Config)
+	if install.Config == nil {
+		install.Config = map[string]any{}
+	}
+	return install
 }
 
 func cloneLLMConnectionModel(model LLMConnectionModel) LLMConnectionModel {
