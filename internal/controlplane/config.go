@@ -16,6 +16,7 @@ type Config struct {
 	AgentPodBaseURLTemplate string
 	DevAgentPodToken        string
 	DatabaseURL             string
+	PluginRuntimeScriptsDir string
 	RunTimeout              time.Duration
 }
 
@@ -30,6 +31,7 @@ func LoadConfig() Config {
 		AgentPodBaseURLTemplate: getenv("AGENTHUB_AGENT_POD_BASE_URL_TEMPLATE", "http://agent-pod-{workspaceId}:3001"),
 		DevAgentPodToken:        getenv("AGENTHUB_DEV_AGENT_POD_TOKEN", ""),
 		DatabaseURL:             getenv("AGENTHUB_DATABASE_URL", ""),
+		PluginRuntimeScriptsDir: getenv("AGENTHUB_PLUGIN_RUNTIME_SCRIPTS_DIR", filepath.Join(cwd, "runtimes", "ts-runtime-host", "dist")),
 		RunTimeout:              durationEnv("AGENTHUB_RUN_TIMEOUT", 30*time.Minute),
 	}
 }

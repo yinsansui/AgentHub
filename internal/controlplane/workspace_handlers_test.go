@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
+	repoPlugin "agenthub/internal/controlplane/plugins/repo"
 	"agenthub/internal/driver"
 	"agenthub/pkg/protocol"
 )
@@ -32,6 +34,14 @@ type workspaceEnvelope struct {
 type deleteWorkspaceEnvelope struct {
 	Deleted              bool                 `json:"deleted"`
 	ReplacementWorkspace *WorkspaceProjection `json:"replacementWorkspace,omitempty"`
+}
+
+type workspacePluginListResponse struct {
+	Plugins []workspacePluginResponse `json:"plugins"`
+}
+
+type workspacePluginEnvelope struct {
+	Plugin workspacePluginResponse `json:"plugin"`
 }
 
 func TestListWorkspacesCreatesDefaultOnce(t *testing.T) {
@@ -298,6 +308,120 @@ func TestWorkspaceDeleteStopsAndRemovesPodOnlyWhenTokenExists(t *testing.T) {
 	}
 }
 
+func TestWorkspacePluginListInstallAndValidation(t *testing.T) {
+	server, baseURL, client := newAuthenticatedWorkspaceTestServer(t)
+	server.config.PluginRuntimeScriptsDir = "/opt/agenthub/ts-runtime-host/dist"
+	workspace := getWorkspaceList(t, client, baseURL).Workspaces[0]
+
+	status, body := doJSON(t, client, http.MethodGet, baseURL+"/workspaces/"+workspace.ID+"/plugins", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list plugins status=%d body=%s, want 200", status, body)
+	}
+	var list workspacePluginListResponse
+	decodeJSON(t, body, &list)
+	if len(list.Plugins) != 1 || list.Plugins[0].ID != bundledRepoPluginID || list.Plugins[0].Installed {
+		t.Fatalf("initial plugins=%+v, want one uninstalled repo plugin", list.Plugins)
+	}
+
+	for name, payload := range map[string]any{
+		"empty repositories": map[string]any{"config": map[string]any{"repositories": []map[string]string{}}},
+		"bad repoName":       repoPluginInstallPayload([]map[string]string{{"repoName": "../AgentHub", "repoUrl": "https://example.com/repo.git"}}),
+		"empty repoUrl":      repoPluginInstallPayload([]map[string]string{{"repoName": "AgentHub", "repoUrl": "   "}}),
+		"duplicate repoName": repoPluginInstallPayload([]map[string]string{{"repoName": "AgentHub", "repoUrl": "https://example.com/repo.git"}, {"repoName": "AgentHub", "repoUrl": "https://example.com/other.git"}}),
+	} {
+		status, body := doJSON(t, client, http.MethodPut, baseURL+"/workspaces/"+workspace.ID+"/plugins/repo/install", payload)
+		if status != http.StatusBadRequest {
+			t.Fatalf("%s status=%d body=%s, want 400", name, status, body)
+		}
+	}
+	validRepositories := []map[string]string{
+		{"repoName": "AgentHub", "repoUrl": "https://example.com/repo.git"},
+		{"repoName": "Docs", "repoUrl": "https://example.com/docs.git"},
+	}
+	status, body = doJSON(t, client, http.MethodPut, baseURL+"/workspaces/"+workspace.ID+"/plugins/unknown/install", repoPluginInstallPayload(validRepositories))
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown plugin install status=%d body=%s, want 404", status, body)
+	}
+	if installs, err := server.store.ListWorkspacePluginInstalls(context.Background(), workspace.ID); err != nil || len(installs) != 0 {
+		t.Fatalf("invalid installs persisted installs=%+v err=%v, want none", installs, err)
+	}
+
+	status, body = doJSON(t, client, http.MethodPut, baseURL+"/workspaces/"+workspace.ID+"/plugins/repo/install", repoPluginInstallPayload(validRepositories))
+	if status != http.StatusOK {
+		t.Fatalf("install repo plugin status=%d body=%s, want 200", status, body)
+	}
+	var installed workspacePluginEnvelope
+	decodeJSON(t, body, &installed)
+	installedRepositories := pluginRepositoriesFromConfig(t, installed.Plugin.Config)
+	if !installed.Plugin.Installed || len(installedRepositories) != 2 || installedRepositories[0].RepoName != "AgentHub" || installedRepositories[1].RepoName != "Docs" {
+		t.Fatalf("installed plugin=%+v, want installed multi-repo config", installed.Plugin)
+	}
+
+	status, body = doJSON(t, client, http.MethodGet, baseURL+"/workspaces/"+workspace.ID+"/plugins", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list after install status=%d body=%s, want 200", status, body)
+	}
+	decodeJSON(t, body, &list)
+	listedRepositories := pluginRepositoriesFromConfig(t, list.Plugins[0].Config)
+	if len(list.Plugins) != 1 || !list.Plugins[0].Installed || len(listedRepositories) != 2 || listedRepositories[1].RepoName != "Docs" {
+		t.Fatalf("plugins after install=%+v, want installed repo plugin", list.Plugins)
+	}
+}
+
+func TestRepoPluginInstallResolvesPluginSkillAndMCP(t *testing.T) {
+	server, baseURL, client := newAuthenticatedWorkspaceTestServer(t)
+	server.config.PluginRuntimeScriptsDir = "/opt/agenthub/ts-runtime-host/dist"
+	workspace := getWorkspaceList(t, client, baseURL).Workspaces[0]
+	ctx := context.Background()
+
+	if _, err := server.store.UpsertWorkspaceSkill(ctx, workspace.ID, SkillDefinitionWithFiles{Definition: SkillDefinition{ID: "workspace-repo-skill", Slug: bundledRepoPluginID, Name: "Workspace Repo"}, Files: []SkillFile{{ID: "workspace-repo-skill-file", Path: "SKILL.md", Content: "workspace repo skill", ContentHash: "hash-workspace-skill"}}}); err != nil {
+		t.Fatalf("seed workspace repo skill: %v", err)
+	}
+	if _, err := server.store.UpsertWorkspaceMCPServer(ctx, workspace.ID, MCPServerDefinitionWithEnv{Definition: MCPServerDefinition{ID: "workspace-repo-mcp", Name: bundledRepoPluginID, Command: "workspace-repo", Transport: "stdio", ContentHash: "hash-workspace-mcp"}}); err != nil {
+		t.Fatalf("seed workspace repo mcp: %v", err)
+	}
+
+	status, body := doJSON(t, client, http.MethodPut, baseURL+"/workspaces/"+workspace.ID+"/plugins/repo/install", repoPluginInstallPayload([]map[string]string{{"repoName": "AgentHub", "repoUrl": "https://example.com/repo.git"}, {"repoName": "Docs", "repoUrl": "https://example.com/docs.git"}}))
+	if status != http.StatusOK {
+		t.Fatalf("install repo plugin status=%d body=%s, want 200", status, body)
+	}
+
+	skills, err := server.resolveSessionSkills(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("resolve skills: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Slug != bundledRepoPluginID || skills[0].Source != protocol.SkillSourcePlugin || len(skills[0].Shadowed) != 1 || skills[0].Shadowed[0].Source != protocol.SkillSourceWorkspace {
+		t.Fatalf("resolved skills=%+v, want plugin repo shadowing workspace repo", skills)
+	}
+	if len(skills[0].Files) != 1 || !strings.Contains(skills[0].Files[0].Content, "AgentHub") || !strings.Contains(skills[0].Files[0].Content, "Docs") || !strings.Contains(skills[0].Files[0].Content, "repository name") || !strings.Contains(skills[0].Files[0].Content, "read and search files directly") {
+		t.Fatalf("repo skill file=%+v, want multi-repo clone-by-name and direct read/search instructions", skills[0].Files)
+	}
+
+	servers, err := server.resolveSessionMCPServers(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("resolve mcp servers: %v", err)
+	}
+	if len(servers) != 1 || servers[0].Name != bundledRepoPluginID || servers[0].Source != protocol.SkillSourcePlugin || servers[0].Command != "node" || len(servers[0].Args) != 1 || servers[0].Args[0] != "/opt/agenthub/ts-runtime-host/dist/repo-mcp.js" {
+		t.Fatalf("resolved mcp servers=%+v, want plugin repo node script", servers)
+	}
+	if _, ok := servers[0].Env["AGENTHUB_REPO_NAME"]; ok {
+		t.Fatalf("repo mcp env=%+v, must not include AGENTHUB_REPO_NAME", servers[0].Env)
+	}
+	if _, ok := servers[0].Env["AGENTHUB_REPO_URL"]; ok {
+		t.Fatalf("repo mcp env=%+v, must not include AGENTHUB_REPO_URL", servers[0].Env)
+	}
+	var repositories []repoPlugin.Repository
+	if err := json.Unmarshal([]byte(servers[0].Env["AGENTHUB_REPOSITORIES"]), &repositories); err != nil {
+		t.Fatalf("decode AGENTHUB_REPOSITORIES %q: %v", servers[0].Env["AGENTHUB_REPOSITORIES"], err)
+	}
+	if len(repositories) != 2 || repositories[0].RepoName != "AgentHub" || repositories[1].RepoName != "Docs" || repositories[1].RepoURL != "https://example.com/docs.git" {
+		t.Fatalf("repo mcp repositories=%+v, want multi-repo config env", repositories)
+	}
+	if len(servers[0].Shadowed) != 1 || servers[0].Shadowed[0].Source != protocol.SkillSourceWorkspace {
+		t.Fatalf("repo mcp shadows=%+v, want workspace mcp shadowed", servers[0].Shadowed)
+	}
+}
+
 type cascadeSeed struct {
 	TaskID    string
 	SessionID string
@@ -347,6 +471,23 @@ func createWorkspaceViaAPI(t *testing.T, client *http.Client, baseURL, name stri
 	var response workspaceEnvelope
 	decodeJSON(t, body, &response)
 	return response.Workspace
+}
+
+func repoPluginInstallPayload(repositories []map[string]string) map[string]any {
+	return map[string]any{"config": map[string]any{"repositories": repositories}}
+}
+
+func pluginRepositoriesFromConfig(t *testing.T, config map[string]any) []repoPlugin.Repository {
+	t.Helper()
+	payload, err := json.Marshal(config["repositories"])
+	if err != nil {
+		t.Fatalf("marshal repositories from config %#v: %v", config, err)
+	}
+	var repositories []repoPlugin.Repository
+	if err := json.Unmarshal(payload, &repositories); err != nil {
+		t.Fatalf("decode repositories from config %#v: %v", config, err)
+	}
+	return repositories
 }
 
 func seedWorkspaceCascadeResources(t *testing.T, store EventStore, workspaceID, suffix string) cascadeSeed {
